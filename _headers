@@ -1,0 +1,7 @@
+/*
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=()
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://accounts.google.com https://apis.google.com https://*.gstatic.com; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https://*.googleusercontent.com https://*.gstatic.com https://*.google.com https://*.googleapis.com; connect-src 'self' https://sheets.googleapis.com https://www.googleapis.com https://oauth2.googleapis.com https://accounts.google.com https://content.googleapis.com https://apis.google.com https://www.google.com; frame-src https://*.google.com https://content.googleapis.com; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none';

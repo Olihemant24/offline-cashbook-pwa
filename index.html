@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com https://apis.google.com https://*.gstatic.com; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https://*.googleusercontent.com https://*.gstatic.com https://*.google.com https://*.googleapis.com; connect-src 'self' https://sheets.googleapis.com https://www.googleapis.com https://oauth2.googleapis.com https://accounts.google.com https://content.googleapis.com https://apis.google.com https://www.google.com; frame-src https://*.google.com https://content.googleapis.com; object-src 'none'; base-uri 'none'; form-action 'self';">
+    <meta name="theme-color" content="#f5f2ec">
+    <meta name="description" content="My Cashbook is an offline-first personal finance application that securely syncs your transactions to your own Google Sheets.">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="icon" href="./icon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="./styles.css">
+    
+    <!-- Google Search Console Verification -->
+    <meta name="google-site-verification" content="pZtIX-caQkMisJxF2MfUvyU95uV0P2OWz-C68nInSYU" />
+    
+    <title>My Cashbook - Offline Personal Finance</title>
+  </head>
+  <body>
+    
+    <!-- LOCK SCREEN OVERLAY -->
+    <div id="lockScreen" style="position: fixed; inset: 0; z-index: 9999; background: #f5f2ec; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; text-align: center;">
+      <div class="brand-mark" aria-hidden="true" style="margin-bottom: 20px; width: 60px; height: 60px; font-size: 28px; border-radius: 18px;">¤</div>
+      <h2 style="margin-bottom: 10px; font-family: 'Manrope', sans-serif; color: #202b27;">Welcome to My Cashbook</h2>
+      <p id="lockMessage" style="color: #7d8680; font-size: 14px; max-width: 320px; margin-bottom: 24px; line-height: 1.5;">Create a master password to encrypt your local data. If you forget it, your offline data cannot be recovered.</p>
+      
+      <form id="unlockForm" style="display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 300px;">
+        <input id="unlockPassword" type="password" placeholder="Master Password" required minlength="10" style="width: 100%; height: 48px; padding: 0 16px; border: 1px solid #e5e4dc; border-radius: 12px; font-size: 16px; text-align: center; background: #fff;">
+        <button type="submit" class="primary-button" id="unlockBtn" style="width: 100%; height: 48px; font-size: 14px; margin-top: 8px;">Unlock Cashbook</button>
+      </form>
+      
+      <button id="biometricBtn" type="button" style="display: none; margin-top: 16px; padding: 12px 24px; background: #fff; border: 1px solid #e5e4dc; border-radius: 12px; font-size: 14px; font-weight: 600; cursor: pointer; align-items: center; gap: 8px; color: #202b27;">
+        <span style="font-size: 20px;">👤</span> Unlock with FaceID / TouchID
+      </button>
+
+      <p id="lockError" style="color: #ba5a48; font-size: 12px; margin-top: 16px; min-height: 18px; font-weight: 600;"></p>
+    </div>
+
+    <main class="app-shell" id="appShell" style="display: none;">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true">¤</div>
+          <div>
+            <p class="eyebrow">PERSONAL CASHBOOK</p>
+            <h1>My Cashbook</h1>
+          </div>
+        </div>
+        <button class="icon-button" id="settingsToggle" type="button" aria-expanded="false" aria-controls="settingsPanel" title="Settings">
+          <span aria-hidden="true">⚙</span><span class="button-label">Settings</span>
+        </button>
+      </header>
+
+      <section class="sync-strip" aria-live="polite">
+        <span class="online-dot" id="onlineDot" aria-hidden="true"></span>
+        <div class="sync-copy">
+          <strong id="syncTitle">Offline-ready</strong>
+          <span id="syncMessage">Your entries save on this device. Connect a Google Sheet to sync.</span>
+        </div>
+        <button class="text-button" id="syncNow" type="button" hidden>Sync now</button>
+      </section>
+
+      <section class="onboarding-card" id="onboardingCard" hidden aria-labelledby="onboardingTitle">
+        <p class="eyebrow">GET STARTED · ABOUT 1 MINUTE</p>
+        <h2 id="onboardingTitle">Keep a backup in your own Google Sheet</h2>
+        <p class="onboarding-copy">My Cashbook already works offline on this device. Connect Google if you also want every entry saved in a spreadsheet that only you own, so you can see it on a computer and never lose your records.</p>
+        <ol class="onboarding-steps">
+          <li>Choose your currency.</li>
+          <li>Tap <strong>Create my cashbook Sheet</strong> and sign in with Google.</li>
+          <li>Done. We set up the Sheet for you, and new entries sync after that.</li>
+        </ol>
+        <div class="onboarding-actions">
+          <label class="field onboarding-currency">
+            <span>Currency <small>3 letters</small></span>
+            <input id="onboardCurrency" type="text" list="currencyOptions" maxlength="3" autocapitalize="characters" autocomplete="off" value="NPR">
+            <datalist id="currencyOptions"><option value="NPR"><option value="USD"><option value="EUR"><option value="GBP"><option value="INR"><option value="AUD"><option value="CAD"></datalist>
+          </label>
+          <button class="primary-button" id="startCreateSheet" type="button">Create my cashbook Sheet</button>
+          <button class="text-button" id="startChooseSheet" type="button">I already have a Sheet</button>
+        </div>
+        <p class="onboarding-trust"><span aria-hidden="true">▣</span> The app can only open the Sheet it creates (or one you pick). It cannot see your other Google Drive files, and your records never pass through our servers. <a href="./privacy.html">Privacy Policy</a></p>
+        <p class="setup-status" id="onboardingStatus" role="status" aria-live="polite"></p>
+        <p class="onboarding-skip">Not now? Keep using the cashbook offline. You can connect any time from Settings.</p>
+      </section>
+
+      <section class="summary-grid" aria-label="Cashbook totals">
+        <article class="summary-card balance-card">
+          <span class="card-label">Available balance</span>
+            <strong class="balance-value" id="balanceTotal">0</strong>
+          <span class="card-note" id="balanceNote">Starting balance plus money in minus money out</span>
+        </article>
+        <article class="summary-card">
+          <span class="card-label">Money came in</span>
+            <strong class="income-value" id="incomeTotal">0</strong>
+          <span class="card-note">All saved transactions</span>
+        </article>
+        <article class="summary-card">
+          <span class="card-label">Money went out</span>
+            <strong class="expense-value" id="expenseTotal">0</strong>
+          <span class="card-note">All saved transactions</span>
+        </article>
+      </section>
+
+      <section class="content-grid">
+        <section class="panel entry-panel" aria-labelledby="entryHeading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">NEW ENTRY</p>
+              <h2 id="entryHeading">Record a transaction</h2>
+            </div>
+            <span class="local-badge"><span aria-hidden="true">●</span> Saves on this device</span>
+          </div>
+
+          <form id="transactionForm" autocomplete="off">
+            <div class="amount-fields">
+              <label class="field amount-field income-field">
+                <span>Money Came In <small id="currencyLabelIn">(NPR)</small></span>
+                <span class="input-wrap"><input id="moneyIn" name="moneyIn" inputmode="decimal" type="number" min="0" step="0.01" placeholder="0"></span>
+              </label>
+              <label class="field amount-field expense-field">
+                <span>Money Went Out <small id="currencyLabelOut">(NPR)</small></span>
+                <span class="input-wrap"><input id="moneyOut" name="moneyOut" inputmode="decimal" type="number" min="0" step="0.01" placeholder="0"></span>
+              </label>
+            </div>
+            <label class="field">
+              <span>Remarks <small>Optional</small></span>
+              <textarea id="remarks" name="remarks" rows="3" maxlength="500" placeholder="What was this transaction for?"></textarea>
+            </label>
+            <div class="save-row">
+              <p class="saved-time-hint"><span aria-hidden="true">◷</span> Date and time are saved automatically</p>
+              <button class="primary-button" type="submit">Save transaction <span aria-hidden="true">↗</span></button>
+            </div>
+            <p class="form-feedback" id="formFeedback" role="status" aria-live="polite"></p>
+          </form>
+        </section>
+
+        <section class="panel history-panel" aria-labelledby="historyHeading">
+          <div class="panel-heading history-heading">
+            <div>
+              <p class="eyebrow">YOUR RECORDS</p>
+              <h2 id="historyHeading">Recent transactions</h2>
+            </div>
+            <span class="record-count" id="recordCount">0 records</span>
+          </div>
+          <div class="transaction-list" id="transactionList" aria-live="polite">
+            <div class="empty-state">
+              <span class="empty-icon" aria-hidden="true">＋</span>
+              <strong>No transactions yet</strong>
+              <span>Your saved entries will appear here.</span>
+            </div>
+          </div>
+          <p class="history-footnote" id="historyFootnote">This device keeps your recent records available offline.</p>
+        </section>
+      </section>
+
+      <details class="settings-panel" id="archivePanel" open>
+        <summary class="settings-summary"><span>Start a new period</span><span class="summary-chevron" aria-hidden="true">⌄</span></summary>
+        <div class="settings-content">
+          <p class="settings-intro">Saves a copy of your Sheet, moves your old entries and dashboard snapshot into archive tabs, and starts counting again from zero. Keep the archive tabs: they are your records of past periods. To tidy them away, hide them instead of deleting them. Connect &amp; sync first.</p>
+          <div style="margin: 14px 0; padding: 18px; border: 2px solid rgba(47, 107, 80, 0.55); border-radius: 16px; background: rgba(47, 107, 80, 0.07);">
+            <label class="field" for="archiveName" style="display: block;">
+              <span style="display: block; font-size: 1.15rem; font-weight: 700; margin-bottom: 6px;">Name this archive</span>
+              <small style="display: block; margin-bottom: 12px;">Optional. This becomes the base name for the archive tabs in your Sheet (e.g. “October 2026” and “October 2026 - Dashboard”). Leave it empty to use the date.</small>
+              <input id="archiveName" type="text" maxlength="60" autocomplete="off" placeholder="Type the archive name here" style="width: 100%; box-sizing: border-box; min-height: 58px; padding: 14px 18px; font-size: 1.15rem; border-radius: 12px;">
+            </label>
+          </div>
+          <label style="display: flex; gap: 10px; align-items: center; margin: 14px 0;">
+            <input type="checkbox" id="carryBalance">
+            <span>Keep my current balance as the starting balance</span>
+          </label>
+          <div class="settings-actions">
+            <button class="secondary-button" id="archiveNow" type="button">Archive &amp; start fresh</button>
+          </div>
+          <p class="setup-status" id="archiveStatus" role="status" aria-live="polite"></p>
+        </div>
+      </details>
+
+      <details class="settings-panel" id="settingsPanel">
+        <summary class="settings-summary"><span>Google Sheet &amp; settings</span><span class="summary-chevron" aria-hidden="true">⌄</span></summary>
+        <div class="settings-content">
+          <p class="settings-intro">Entries are always saved on this device first. When your Google Sheet is connected they are also copied there. <a id="openSheetLink" href="#" target="_blank" rel="noopener noreferrer" hidden>Open my Google Sheet ↗</a></p>
+          <div class="settings-fields">
+            <label class="field">
+              <span>Currency code <small>ISO 4217</small></span>
+              <input id="currencyCode" type="text" maxlength="3" autocapitalize="characters" autocomplete="off" value="NPR" placeholder="NPR, USD, EUR, INR">
+              <small class="currency-note">Choose before your first entry; keep one currency per cashbook.</small>
+            </label>
+            <label class="field">
+              <span>Your Google Sheet</span>
+              <input id="spreadsheetInput" type="text" readonly placeholder="Not connected yet">
+            </label>
+          </div>
+          
+          <div style="margin: 16px 0; padding: 16px; background: #f9f9f7; border: 1px solid #e5e4dc; border-radius: 12px;">
+            <h3 style="margin: 0 0 10px 0; font-size: 14px; color: #202b27;">Security &amp; Locking</h3>
+            <label style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px; cursor: pointer;">
+              <input type="checkbox" id="biometricToggle">
+              <span>Enable FaceID / TouchID unlock</span>
+            </label>
+            <button class="secondary-button" id="lockNowBtn" type="button" style="width: 100%; border-color: #ba5a48; color: #ba5a48;">Lock App Now</button>
+          </div>
+
+          <details class="developer-settings" id="devSettings">
+            <summary>Advanced (optional)</summary>
+            <p class="dev-intro">Most people never need this. The app already includes everything it needs to talk to Google. Edit these only if you run your own Google Cloud project.</p>
+            <div class="settings-fields" style="margin-top: 10px;">
+              <label class="field">
+                <span>Google OAuth client ID</span>
+                <input id="clientId" type="text" inputmode="url" autocomplete="off" placeholder="Default master client ID is active">
+              </label>
+              <label class="field">
+                <span>Google API key</span>
+                <input id="apiKey" type="text" inputmode="url" autocomplete="off" placeholder="Default master API key is active">
+              </label>
+              <label class="field">
+                <span>Google Cloud project number</span>
+                <input id="appId" type="text" inputmode="numeric" autocomplete="off" placeholder="Default master project number is active">
+              </label>
+              <div class="settings-fields-two">
+                <label class="field">
+                  <span>Form response tab</span>
+                  <input id="responseTab" type="text" value="Form responses 1" autocomplete="off">
+                </label>
+                <label class="field">
+                  <span>Dashboard tab</span>
+                  <input id="dashboardTab" type="text" value="Dashboard" autocomplete="off">
+                </label>
+              </div>
+            </div>
+          </details>
+
+          <div class="privacy-note"><span aria-hidden="true">▣</span><span>Your records stay in your own Google Drive. The app can only open the Sheet it created or one you picked. You can remove its access any time at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer">your Google Account permissions</a>.</span></div>
+          <div class="settings-actions">
+            <button class="secondary-button" id="saveSettings" type="button">Save settings</button>
+            <button class="secondary-button" id="chooseGoogleSheet" type="button">Pick another Sheet</button>
+            <button class="secondary-button" id="createNewSheet" type="button">Create a new Sheet</button>
+            <button class="primary-button" id="connectGoogle" type="button">Sign in &amp; sync</button>
+          </div>
+          <p class="setup-status" id="setupStatus" role="status" aria-live="polite">Not connected yet.</p>
+          <p class="sheet-change-note">When you first sync, the app checks the existing headers and adds one “Offline Entry ID” header to the next empty column. This ID lets it safely retry without duplicating a transaction. It appends rows to your response tab and reads the starting balance from Dashboard!B13.</p>
+        </div>
+      </details>
+
+      <footer class="app-footer" style="flex-direction: column; align-items: flex-start; gap: 10px; padding-top: 20px;">
+        <p style="margin: 0; color: #a0a59e; font-size: 11px; line-height: 1.5; max-width: 800px;">
+          <strong>About My Cashbook:</strong> My Cashbook is a privacy-first, offline-ready Progressive Web App (PWA) for tracking personal finances. It stores your transaction data locally on your device and gives you the option to securely sync your cashbook to a Google Sheet in your own Google Drive. We do not collect or store your financial data on our servers.
+        </p>
+        <span>Cashbook entries are stored locally first · <a href="./privacy.html" style="color: inherit; text-decoration: underline;">Privacy Policy</a></span>
+        <span id="storageStatus">Checking local storage…</span>
+      </footer>
+    </main>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="./app.js" defer></script>
+  </body>
+</html>
