@@ -7,7 +7,7 @@ const DEFAULT_CURRENCY = 'NPR';
 const PERIODS_TAB = 'Cashbook Periods';
 
 const DEFAULT_CLIENT_ID = '1017685550464-um4md5jhrbki0gbna4d7b0osmliuddqm.apps.googleusercontent.com';
-const DEFAULT_API_KEY = 'AIzaSyAq99qSOcAgYuODAXNiqrZEpNS6OsyGMb8';
+const DEFAULT_API_KEY = 'AIzaSyCBYJek40PIcM2Qr8dGJHpYto12SH9qBH8';
 const DEFAULT_APP_ID = '1017685550464';
 const APP_BUILD = 27;
 
