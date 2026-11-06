@@ -1,4 +1,4 @@
-const CACHE_NAME = 'my-cashbook-shell-v16';
+const CACHE_NAME = 'my-cashbook-shell-v17';
 const APP_SHELL = ['./', './index.html', './styles.css', './app.js', './manifest.webmanifest', './icon.svg', './privacy.html'];
 
 self.addEventListener('install', (event) => {

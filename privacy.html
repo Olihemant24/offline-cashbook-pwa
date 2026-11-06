@@ -22,6 +22,7 @@
 
     <h2>2. Data Collection and Storage</h2>
     <p><strong>Local Storage:</strong> All transaction data, amounts, and remarks are initially stored locally on your device using IndexedDB. We do not transmit this data to our servers. If you uninstall the app or clear your browser data, local records that have not synced will be lost.</p>
+    <p><strong>Device lock &amp; biometrics:</strong> Your on-device data is encrypted with a random key. You may optionally add a master password, and/or unlock with Face ID / Touch ID / fingerprint using your browser's passkey. Your password is never stored on the device; the biometric option derives its own key from your passkey, so no password is saved. If you forget your password, you can erase this device's data and start again; entries already synced to your Google Sheet remain in your Sheet.</p>
     <p><strong>Sign-in token:</strong> When you sign in with Google, the app receives a short-lived access token (it expires in about one hour). It is kept in your browser session for this tab on your device so you do not have to sign in again immediately, and it is only ever sent to Google. Closing the tab discards the token.</p>
     <p><strong>Google Sheets Sync:</strong> If you choose to connect Google Sheets, your data is transmitted directly from your browser to Google's servers.</p>
 

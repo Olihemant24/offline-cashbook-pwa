@@ -21,18 +21,20 @@
     <div id="lockScreen" style="position: fixed; inset: 0; z-index: 9999; background: #f5f2ec; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; text-align: center;">
       <div class="brand-mark" aria-hidden="true" style="margin-bottom: 20px; width: 60px; height: 60px; font-size: 28px; border-radius: 18px;">¤</div>
       <h2 style="margin-bottom: 10px; font-family: 'Manrope', sans-serif; color: #202b27;">Welcome to My Cashbook</h2>
-      <p id="lockMessage" style="color: #7d8680; font-size: 14px; max-width: 320px; margin-bottom: 24px; line-height: 1.5;">Create a master password to encrypt your local data. If you forget it, your offline data cannot be recovered.</p>
+      <p id="lockMessage" style="color: #7d8680; font-size: 14px; max-width: 320px; margin-bottom: 24px; line-height: 1.5;">Unlock your cashbook to continue.</p>
       
       <form id="unlockForm" style="display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 300px;">
-        <input id="unlockPassword" type="password" placeholder="Master Password" required minlength="10" style="width: 100%; height: 48px; padding: 0 16px; border: 1px solid #e5e4dc; border-radius: 12px; font-size: 16px; text-align: center; background: #fff;">
+        <input id="unlockPassword" type="password" placeholder="Master Password" autocomplete="current-password" style="width: 100%; height: 48px; padding: 0 16px; border: 1px solid #e5e4dc; border-radius: 12px; font-size: 16px; text-align: center; background: #fff;">
         <button type="submit" class="primary-button" id="unlockBtn" style="width: 100%; height: 48px; font-size: 14px; margin-top: 8px;">Unlock Cashbook</button>
       </form>
       
       <button id="biometricBtn" type="button" style="display: none; margin-top: 16px; padding: 12px 24px; background: #fff; border: 1px solid #e5e4dc; border-radius: 12px; font-size: 14px; font-weight: 600; cursor: pointer; align-items: center; gap: 8px; color: #202b27;">
-        <span style="font-size: 20px;">👤</span> Unlock with FaceID / TouchID
+        <span style="font-size: 20px;">👤</span> Unlock with Face ID / Touch ID
       </button>
 
-      <p id="lockError" style="color: #ba5a48; font-size: 12px; margin-top: 16px; min-height: 18px; font-weight: 600;"></p>
+      <button id="forgotPasswordBtn" type="button" style="display: none; margin-top: 16px; padding: 6px 10px; background: transparent; border: 0; color: #1f6b50; font-size: 12px; font-weight: 600; cursor: pointer;">Forgot password?</button>
+
+      <p id="lockError" style="color: #ba5a48; font-size: 12px; margin-top: 12px; min-height: 18px; font-weight: 600;"></p>
     </div>
 
     <main class="app-shell" id="appShell" style="display: none;">
@@ -190,17 +192,26 @@
           </div>
           
           <div style="margin: 16px 0; padding: 16px; background: #f9f9f7; border: 1px solid #e5e4dc; border-radius: 12px;">
-            <h3 style="margin: 0 0 10px 0; font-size: 14px; color: #202b27;">Security &amp; Locking</h3>
+            <h3 style="margin: 0 0 6px 0; font-size: 14px; color: #202b27;">Security &amp; Locking</h3>
+            <p id="securityStatus" class="dev-intro" style="margin: 0 0 12px 0;">Checking…</p>
             <label style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px; cursor: pointer;">
               <input type="checkbox" id="biometricToggle">
-              <span>Enable FaceID / TouchID unlock</span>
+              <span>Unlock with Face ID / Touch ID / fingerprint</span>
             </label>
+            <label class="field" style="margin: 12px 0; max-width: 360px;">
+              <span>Master password <small>optional · min 10 characters</small></span>
+              <input id="passwordInput" type="password" autocomplete="new-password" placeholder="Set or change your password" style="height: 42px; padding: 0 11px; font-size: 11px; font-weight: 500;">
+            </label>
+            <div class="settings-actions" style="margin: 10px 0; justify-content: flex-start;">
+              <button class="secondary-button" id="setPasswordBtn" type="button">Set / change password</button>
+              <button class="secondary-button" id="removePasswordBtn" type="button">Remove password</button>
+            </div>
             <button class="secondary-button" id="lockNowBtn" type="button" style="width: 100%; border-color: #ba5a48; color: #ba5a48;">Lock App Now</button>
           </div>
 
           <details class="developer-settings" id="devSettings">
-            <summary>Advanced (optional)</summary>
-            <p class="dev-intro">Most people never need this. The app already includes everything it needs to talk to Google. Edit these only if you run your own Google Cloud project.</p>
+            <summary>Google Cloud credentials (change your Google ID)</summary>
+            <p class="dev-intro">Most people never need this. The app ships with shared defaults. To use your own Google Cloud project, paste its OAuth client ID, API key, and project number, then Save and reconnect.</p>
             <div class="settings-fields" style="margin-top: 10px;">
               <label class="field">
                 <span>Google OAuth client ID</span>
@@ -225,6 +236,7 @@
                 </label>
               </div>
             </div>
+            <button class="secondary-button" id="resetGoogleCreds" type="button" style="margin-top: 10px;">Reset to app defaults</button>
           </details>
 
           <div class="privacy-note"><span aria-hidden="true">▣</span><span>Your records stay in your own Google Drive. The app can only open the Sheet it created or one you picked. You can remove its access any time at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer">your Google Account permissions</a>.</span></div>
@@ -233,6 +245,7 @@
             <button class="secondary-button" id="chooseGoogleSheet" type="button">Pick another Sheet</button>
             <button class="secondary-button" id="createNewSheet" type="button">Create a new Sheet</button>
             <button class="primary-button" id="connectGoogle" type="button">Sign in &amp; sync</button>
+            <button class="secondary-button" id="signOutGoogle" type="button">Sign out</button>
           </div>
           <p class="setup-status" id="setupStatus" role="status" aria-live="polite">Not connected yet.</p>
           <p class="sheet-change-note">When you first sync, the app checks the existing headers and adds one “Offline Entry ID” header to the next empty column. This ID lets it safely retry without duplicating a transaction. It appends rows to your response tab and reads the starting balance from Dashboard!B13.</p>

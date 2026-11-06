@@ -9,23 +9,52 @@ const PERIODS_TAB = 'Cashbook Periods';
 const DEFAULT_CLIENT_ID = '1017685550464-um4md5jhrbki0gbna4d7b0osmliuddqm.apps.googleusercontent.com';
 const DEFAULT_API_KEY = 'AIzaSyAq99qSOcAgYuODAXNiqrZEpNS6OsyGMb8';
 const DEFAULT_APP_ID = '1017685550464';
-const APP_BUILD = 26; 
+const APP_BUILD = 27;
 
 let dbPromise;
 let accessToken = null;
 let tokenExpiresAt = 0;
-let cryptoKey = null; 
+let cryptoKey = null;
+let masterKeyRaw = null;
+let unreadableCount = 0;
 let idleTimeout = null;
 
 // ===== CRYPTO HELPERS =====
-async function deriveKey(password, saltBase64) {
-  const enc = new TextEncoder();
+// All cashbook data is encrypted with a random 256-bit master key held in
+// memory. That master key is "wrapped" (encrypted) with either a password-
+// derived key, a device passkey (WebAuthn PRF), or left raw when the user
+// opts out of a lock. The master password is never stored in plain text.
+function bytesToB64(bytes) {
+  return btoa(String.fromCharCode(...new Uint8Array(bytes)));
+}
+function b64ToBytes(base64) {
+  return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+}
+function randomSaltB64() {
+  return bytesToB64(crypto.getRandomValues(new Uint8Array(16)));
+}
+async function importAesKey(bytes) {
+  return crypto.subtle.importKey('raw', bytes, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+}
+async function exportAesKey(key) {
+  return new Uint8Array(await crypto.subtle.exportKey('raw', key));
+}
+async function generateMasterKey() {
+  cryptoKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+  masterKeyRaw = await exportAesKey(cryptoKey);
+  return cryptoKey;
+}
+async function setMasterKeyFromBytes(bytes) {
+  cryptoKey = await importAesKey(bytes);
+  masterKeyRaw = bytes;
+  return cryptoKey;
+}
+async function derivePasswordKek(password, saltBase64) {
   const keyMaterial = await crypto.subtle.importKey(
-    'raw', enc.encode(password), { name: 'PBKDF2' }, false, ['deriveBits', 'deriveKey']
+    'raw', new TextEncoder().encode(password), { name: 'PBKDF2' }, false, ['deriveBits', 'deriveKey']
   );
-  const salt = Uint8Array.from(atob(saltBase64), c => c.charCodeAt(0));
   return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt, iterations: 600000, hash: 'SHA-256' }, // Upgraded from 100k to 600k
+    { name: 'PBKDF2', salt: b64ToBytes(saltBase64), iterations: 600000, hash: 'SHA-256' },
     keyMaterial,
     { name: 'AES-GCM', length: 256 },
     false,
@@ -33,24 +62,20 @@ async function deriveKey(password, saltBase64) {
   );
 }
 
-async function encryptText(text) {
-  if (!cryptoKey) throw new Error("App is locked.");
-  const enc = new TextEncoder();
+async function encryptText(text, key = cryptoKey) {
+  if (!key) throw new Error("App is locked.");
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, enc.encode(text));
-  return {
-    iv: btoa(String.fromCharCode(...iv)),
-    data: btoa(String.fromCharCode(...new Uint8Array(ciphertext)))
-  };
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(text));
+  return { iv: bytesToB64(iv), data: bytesToB64(new Uint8Array(ciphertext)) };
 }
 
-async function decryptText(encObj) {
-  if (!cryptoKey) throw new Error("App is locked.");
-  if (!encObj || !encObj.iv || !encObj.data) return null; 
+async function decryptText(encObj, key = cryptoKey) {
+  if (!key) throw new Error("App is locked.");
+  if (!encObj || !encObj.iv || !encObj.data) return null;
   try {
-    const iv = Uint8Array.from(atob(encObj.iv), c => c.charCodeAt(0));
-    const data = Uint8Array.from(atob(encObj.data), c => c.charCodeAt(0));
-    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, cryptoKey, data);
+    const iv = b64ToBytes(encObj.iv);
+    const data = b64ToBytes(encObj.data);
+    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
     return new TextDecoder().decode(decrypted);
   } catch (e) {
     console.error("Decryption failed", e);
@@ -58,60 +83,129 @@ async function decryptText(encObj) {
   }
 }
 
-// ===== WEBAUTHN (BIOMETRICS) =====
-async function setupBiometrics(masterPassword) {
-  if (!window.PublicKeyCredential) throw new Error("Biometrics not supported on this device.");
-  const challenge = new Uint8Array(32);
-  crypto.getRandomValues(challenge);
-  
+async function wrapMasterKeyWith(kek) {
+  if (!masterKeyRaw) throw new Error('Unlock the cashbook first.');
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, kek, masterKeyRaw);
+  return { iv: bytesToB64(iv), data: bytesToB64(new Uint8Array(cipher)) };
+}
+
+async function unwrapMasterKey(wrapped, kek) {
+  const iv = b64ToBytes(wrapped.iv);
+  const data = b64ToBytes(wrapped.data);
+  const raw = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, kek, data);
+  await setMasterKeyFromBytes(new Uint8Array(raw));
+  return cryptoKey;
+}
+
+// ===== WEBAUTHN PRF (SECURE FACE ID / FINGERPRINT) =====
+// The passkey's PRF extension derives a secret from the device's biometric /
+// PIN credential. That secret wraps the master key, so the master password is
+// never stored anywhere on the device.
+async function createPrfCredential(saltBytes) {
+  const challenge = crypto.getRandomValues(new Uint8Array(32));
+  const credential = await navigator.credentials.create({
+    publicKey: {
+      challenge,
+      rp: { name: 'My Cashbook' },
+      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'cashbook-user', displayName: 'Cashbook User' },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+      authenticatorSelection: { userVerification: 'required', residentKey: 'preferred' },
+      extensions: { prf: { eval: { first: saltBytes } } }
+    }
+  });
+  const output = credential.getClientExtensionResults?.()?.prf?.results?.first;
+  if (!output) throw new Error('This device or browser does not support secure Face ID / fingerprint unlock.');
+  return { credId: new Uint8Array(credential.rawId), prfBytes: new Uint8Array(output) };
+}
+
+async function getPrfBytes(credIdBytes, saltBytes) {
+  const challenge = crypto.getRandomValues(new Uint8Array(32));
+  const assertion = await navigator.credentials.get({
+    publicKey: {
+      challenge,
+      allowCredentials: [{ id: credIdBytes, type: 'public-key' }],
+      userVerification: 'required',
+      extensions: { prf: { eval: { first: saltBytes } } }
+    }
+  });
+  const output = assertion.getClientExtensionResults?.()?.prf?.results?.first;
+  if (!output) throw new Error('Biometric key is not available on this device.');
+  return new Uint8Array(output);
+}
+
+async function enableBiometrics() {
+  if (!window.PublicKeyCredential) throw new Error('Face ID / fingerprint is not supported on this device.');
+  const saltBytes = crypto.getRandomValues(new Uint8Array(32));
+  let cred;
   try {
-    const credential = await navigator.credentials.create({
-      publicKey: {
-        challenge,
-        rp: { name: 'My Cashbook' },
-        user: { id: new Uint8Array(16), name: 'cashbook-user', displayName: 'Cashbook User' },
-        pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
-        authenticatorSelection: { userVerification: 'required' }
-      }
-    });
-    localStorage.setItem('cb_bio_id', btoa(String.fromCharCode(...new Uint8Array(credential.rawId))));
-    localStorage.setItem('cb_bio_pwd', masterPassword); // Saved securely behind FaceID gate
-    localStorage.setItem('cb_bio_enabled', 'true');
-    return true;
+    cred = await createPrfCredential(saltBytes);
   } catch (err) {
-    console.error("Biometric setup failed", err);
-    throw new Error("Could not enable biometrics.");
+    throw new Error(err?.message || 'Could not enable Face ID / fingerprint.');
   }
+  const kek = await importAesKey(cred.prfBytes);
+  const wrapped = await wrapMasterKeyWith(kek);
+  localStorage.setItem('cb_prf_salt', bytesToB64(saltBytes));
+  localStorage.setItem('cb_prf_cred_id', bytesToB64(cred.credId));
+  localStorage.setItem('cb_prf_key_wrapped', JSON.stringify(wrapped));
+  localStorage.removeItem('cb_key_raw');
+  return true;
 }
 
 async function authenticateWithBiometrics() {
-  const idB64 = localStorage.getItem('cb_bio_id');
-  const savedPwd = localStorage.getItem('cb_bio_pwd');
-  if (!idB64 || !savedPwd) return false;
-
-  const id = Uint8Array.from(atob(idB64), c => c.charCodeAt(0));
-  const challenge = new Uint8Array(32);
-  crypto.getRandomValues(challenge);
-
+  const credIdB64 = localStorage.getItem('cb_prf_cred_id');
+  const saltB64 = localStorage.getItem('cb_prf_salt');
+  const wrappedJson = localStorage.getItem('cb_prf_key_wrapped');
+  if (!credIdB64 || !saltB64 || !wrappedJson) return false;
   try {
-    await navigator.credentials.get({
-      publicKey: { challenge, allowCredentials: [{ id, type: 'public-key' }], userVerification: 'required' }
-    });
-    
-    // Auth successful, inject password and submit
-    elements.unlockPassword.value = savedPwd;
-    elements.unlockForm.dispatchEvent(new Event('submit'));
+    const prfBytes = await getPrfBytes(b64ToBytes(credIdB64), b64ToBytes(saltB64));
+    const kek = await importAesKey(prfBytes);
+    await unwrapMasterKey(JSON.parse(wrappedJson), kek);
+    await openDatabase();
+    const check = await getSetting('__auth_check__', null);
+    if (check !== 'valid') {
+      cryptoKey = null;
+      masterKeyRaw = null;
+      return false;
+    }
     return true;
   } catch (err) {
-    console.error("Biometric auth failed", err);
+    console.error('Biometric unlock failed', err);
     return false;
   }
 }
 
 function disableBiometrics() {
-  localStorage.removeItem('cb_bio_id');
-  localStorage.removeItem('cb_bio_pwd');
-  localStorage.removeItem('cb_bio_enabled');
+  localStorage.removeItem('cb_prf_cred_id');
+  localStorage.removeItem('cb_prf_salt');
+  localStorage.removeItem('cb_prf_key_wrapped');
+  if (!localStorage.getItem('cb_key_wrapped') && masterKeyRaw) {
+    localStorage.setItem('cb_key_raw', bytesToB64(masterKeyRaw));
+  }
+}
+
+// ===== SECURITY STATE =====
+function securityState() {
+  return {
+    hasPassword: Boolean(localStorage.getItem('cb_key_wrapped')),
+    hasBiometrics: Boolean(localStorage.getItem('cb_prf_key_wrapped')),
+    hasRaw: Boolean(localStorage.getItem('cb_key_raw'))
+  };
+}
+function isProtected() {
+  const state = securityState();
+  return state.hasPassword || state.hasBiometrics;
+}
+function updateSecurityUi() {
+  if (!elements.securityStatus) return;
+  const state = securityState();
+  const parts = [];
+  parts.push(state.hasPassword ? 'Master password: ON' : 'Master password: OFF');
+  parts.push(state.hasBiometrics ? 'Face ID / fingerprint: ON' : 'Face ID / fingerprint: OFF');
+  if (!isProtected()) parts.push('This device opens without a lock.');
+  elements.securityStatus.textContent = parts.join('  ·  ');
+  if (elements.biometricToggle) elements.biometricToggle.checked = state.hasBiometrics;
+  if (elements.lockNowBtn) elements.lockNowBtn.style.display = isProtected() ? '' : 'none';
 }
 
 // ===== TOKEN MANAGEMENT =====
@@ -182,7 +276,7 @@ const currencyFormatters = new Map();
 
 const $ = (id) => document.getElementById(id);
 const elements = {
-  lockScreen: $('lockScreen'), lockMessage: $('lockMessage'), unlockForm: $('unlockForm'), unlockPassword: $('unlockPassword'), unlockBtn: $('unlockBtn'), lockError: $('lockError'), appShell: $('appShell'), biometricBtn: $('biometricBtn'),
+  lockScreen: $('lockScreen'), lockMessage: $('lockMessage'), unlockForm: $('unlockForm'), unlockPassword: $('unlockPassword'), unlockBtn: $('unlockBtn'), lockError: $('lockError'), appShell: $('appShell'), biometricBtn: $('biometricBtn'), forgotPasswordBtn: $('forgotPasswordBtn'),
   onlineDot: $('onlineDot'), syncTitle: $('syncTitle'), syncMessage: $('syncMessage'), syncNow: $('syncNow'),
   balanceTotal: $('balanceTotal'), balanceNote: $('balanceNote'), incomeTotal: $('incomeTotal'), expenseTotal: $('expenseTotal'),
   transactionForm: $('transactionForm'), moneyIn: $('moneyIn'), moneyOut: $('moneyOut'), remarks: $('remarks'), formFeedback: $('formFeedback'),
@@ -191,7 +285,7 @@ const elements = {
   currencyCode: $('currencyCode'), saveSettings: $('saveSettings'), chooseGoogleSheet: $('chooseGoogleSheet'), createNewSheet: $('createNewSheet'), connectGoogle: $('connectGoogle'), setupStatus: $('setupStatus'), toast: $('toast'),
   onboardingCard: $('onboardingCard'), onboardCurrency: $('onboardCurrency'), startCreateSheet: $('startCreateSheet'), startChooseSheet: $('startChooseSheet'), onboardingStatus: $('onboardingStatus'), openSheetLink: $('openSheetLink'),
   carryBalance: $('carryBalance'), archiveName: $('archiveName'), archiveNow: $('archiveNow'), archiveStatus: $('archiveStatus'),
-  biometricToggle: $('biometricToggle'), lockNowBtn: $('lockNowBtn')
+  biometricToggle: $('biometricToggle'), lockNowBtn: $('lockNowBtn'), securityStatus: $('securityStatus'), passwordInput: $('passwordInput'), setPasswordBtn: $('setPasswordBtn'), removePasswordBtn: $('removePasswordBtn'), signOutGoogle: $('signOutGoogle'), resetGoogleCreds: $('resetGoogleCreds')
 };
 
 // ===== DATABASE & ENCRYPTION =====
@@ -228,6 +322,7 @@ async function getAllTransactions() {
   });
   await done;
 
+  unreadableCount = 0;
   const decryptedRecords = [];
   for (const record of result) {
     if (record.encrypted) {
@@ -236,7 +331,12 @@ async function getAllTransactions() {
         try {
           const parsed = JSON.parse(plaintext);
           decryptedRecords.push({ id: record.id, ...parsed });
-        } catch (e) { console.error("Failed to parse decrypted record", record.id); }
+        } catch (e) {
+          unreadableCount++;
+          console.error("Failed to parse decrypted record", record.id);
+        }
+      } else {
+        unreadableCount++;
       }
     } else {
       decryptedRecords.push(record);
@@ -519,6 +619,11 @@ async function refreshView() {
   elements.balanceTotal.textContent = formatMoney(startingBalance + income - expense);
   elements.balanceNote.textContent = startingBalance ? `Includes your ${formatMoney(startingBalance)} starting balance` : 'Starting balance plus money in minus money out';
   renderTransactions(records);
+  if (elements.historyFootnote) {
+    elements.historyFootnote.textContent = unreadableCount
+      ? `${unreadableCount} saved ${unreadableCount === 1 ? 'entry' : 'entries'} could not be read on this device.`
+      : 'This device keeps your recent records available offline.';
+  }
   const pending = records.filter((item) => item.syncState === 'pending').length;
   const hasSheet = Boolean(cachedConfig?.spreadsheetId);
   updateOnboarding();
@@ -1560,6 +1665,7 @@ async function cleanupOldRightSummary(config) {
 
 async function syncToSheet() {
   if (isSyncing) return;
+  if (!cryptoKey) return; // App is locked
   if (!navigator.onLine) {
     setSyncStatus('Saved offline', 'Your entries are queued on this device for when you are online.', 'offline');
     return;
@@ -1603,6 +1709,7 @@ async function syncToSheet() {
 }
 
 async function oneTapSync() {
+  if (!cryptoKey) return; // App is locked
   if (!cachedConfig?.spreadsheetId) {
     updateOnboarding();
     elements.onboardingCard?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1623,7 +1730,7 @@ async function oneTapSync() {
 }
 
 async function autoSync() {
-  if (isSyncing || !navigator.onLine || !cachedConfig?.spreadsheetId) return;
+  if (isSyncing || !cryptoKey || !navigator.onLine || !cachedConfig?.spreadsheetId) return;
   const hasPending = (await getAllTransactions()).some((record) => record.syncState === 'pending');
   if (!hasPending && Date.now() - lastSyncFinishedAt < 120000) return;
   if (!tokenIsValid()) {
@@ -1644,32 +1751,42 @@ async function mergeSheetRecords(remoteRecords) {
 }
 
 // ===== INITIALIZATION & UNLOCK FLOW =====
-function lockApp() {
-  cryptoKey = null;
-  clearTimeout(idleTimeout);
-  elements.appShell.style.display = 'none';
+function showLockScreen(mode) {
   elements.lockScreen.style.display = 'flex';
+  elements.appShell.style.display = 'none';
+  const hasPassword = mode === 'password' || mode === 'both';
+  const hasBiometrics = mode === 'biometrics' || mode === 'both';
+  elements.unlockForm.style.display = hasPassword ? 'flex' : 'none';
+  elements.biometricBtn.style.display = hasBiometrics ? 'flex' : 'none';
+  elements.forgotPasswordBtn.style.display = 'inline-block';
+  elements.forgotPasswordBtn.textContent = hasPassword ? 'Forgot password?' : 'Can’t unlock? Erase this device';
   elements.unlockPassword.value = '';
   elements.unlockBtn.textContent = 'Unlock Cashbook';
-  elements.biometricBtn.style.display = localStorage.getItem('cb_bio_enabled') ? 'flex' : 'none';
+}
+
+function lockApp() {
+  cryptoKey = null;
+  masterKeyRaw = null;
+  clearTimeout(idleTimeout);
+  const state = securityState();
+  showLockScreen(state.hasPassword && state.hasBiometrics ? 'both' : state.hasPassword ? 'password' : 'biometrics');
+  elements.lockMessage.textContent = state.hasPassword
+    ? 'Enter your master password to unlock your encrypted cashbook.'
+    : 'Use Face ID / fingerprint to unlock your cashbook.';
 }
 
 function resetIdleTimer() {
   clearTimeout(idleTimeout);
   if (!cryptoKey) return; // App already locked
-  idleTimeout = setTimeout(() => {
-    lockApp();
-  }, 5 * 60 * 1000); // 5 minutes
+  if (!isProtected()) return; // No lock configured
+  idleTimeout = setTimeout(() => lockApp(), 5 * 60 * 1000); // 5 minutes
 }
 
 async function startApp() {
   elements.lockScreen.style.display = 'none';
   elements.appShell.style.display = 'block';
-  
-  // Update biometric toggle state
-  if (elements.biometricToggle) {
-    elements.biometricToggle.checked = localStorage.getItem('cb_bio_enabled') === 'true';
-  }
+
+  updateSecurityUi();
 
   await loadSavedConfig();
   activeCurrencyCode = await getSetting('currencyCode', DEFAULT_CURRENCY) || DEFAULT_CURRENCY;
@@ -1677,118 +1794,231 @@ async function startApp() {
   cachedConfig = await getSetting('googleConfig', {});
   if (elements.onboardCurrency) elements.onboardCurrency.value = cachedConfig.currencyCode || activeCurrencyCode || DEFAULT_CURRENCY;
   await refreshView();
-  if (navigator.onLine) void loadGoogleIdentity().catch(() => {}); 
+  if (navigator.onLine) void loadGoogleIdentity().catch(() => {});
 
   void autoSync();
   resetIdleTimer(); // Start the inactivity timer
 }
 
-async function initialize() {
-  let saltBase64 = localStorage.getItem('cb_salt');
-  const isFirstSetup = !saltBase64;
+async function readAllRaw(storeName) {
+  const db = await openDatabase();
+  const tx = db.transaction(storeName, 'readonly');
+  return new Promise((resolve, reject) => {
+    const request = tx.objectStore(storeName).getAll();
+    request.onsuccess = () => resolve(request.result || []);
+    request.onerror = () => reject(request.error);
+  });
+}
 
-  if (isFirstSetup) {
-    elements.lockMessage.textContent = "Create a master password (min 10 characters) to encrypt your local data. If you forget it, your offline data cannot be recovered.";
-    elements.unlockBtn.textContent = "Create Password";
-  } else {
-    elements.lockMessage.textContent = "Enter your master password to unlock your encrypted cashbook.";
-    elements.unlockBtn.textContent = "Unlock Cashbook";
-    if (localStorage.getItem('cb_bio_enabled')) {
-      elements.biometricBtn.style.display = 'flex';
+async function migrateFromLegacy(legacyKey) {
+  // Switch to a random master key and re-encrypt everything under it.
+  await generateMasterKey();
+  const transactions = await readAllRaw(STORE_TRANSACTIONS);
+  for (const record of transactions) {
+    let payload = record;
+    if (record.encrypted) {
+      const plaintext = await decryptText(record.encrypted, legacyKey);
+      if (plaintext == null) continue;
+      try { payload = JSON.parse(plaintext); } catch { continue; }
+      payload.id = record.id; // keyPath lives outside the encrypted payload
     }
+    await putTransaction(payload);
   }
+  const settings = await readAllRaw(STORE_SETTINGS);
+  for (const setting of settings) {
+    let value;
+    if (setting.encrypted) {
+      const plaintext = await decryptText(setting.encrypted, legacyKey);
+      if (plaintext == null) continue;
+      try { value = JSON.parse(plaintext); } catch { continue; }
+    } else if (setting.value !== undefined) {
+      value = setting.value;
+    } else {
+      continue;
+    }
+    await saveSetting(setting.key, value);
+  }
+  const wrapped = await wrapMasterKeyWith(legacyKey);
+  localStorage.setItem('cb_key_wrapped', JSON.stringify(wrapped));
+  localStorage.setItem('cb_has_password', 'true');
+}
 
+async function unlockWithPassword(password) {
+  const hasWrapped = localStorage.getItem('cb_key_wrapped');
+  const hasPrf = localStorage.getItem('cb_prf_key_wrapped');
+  const salt = localStorage.getItem('cb_salt');
+  const isLegacy = !!salt && !hasWrapped && !hasPrf && !localStorage.getItem('cb_key_raw');
+
+  if (isLegacy) {
+    // Old scheme: data was encrypted directly with the PBKDF2 key.
+    const legacyKey = await derivePasswordKek(password, salt);
+    cryptoKey = legacyKey;
+    await openDatabase();
+    const check = await getSetting('__auth_check__', null);
+    if (check !== 'valid') {
+      cryptoKey = null;
+      masterKeyRaw = null;
+      throw new Error('Incorrect password.');
+    }
+    await migrateFromLegacy(legacyKey);
+  } else if (hasWrapped) {
+    const kek = await derivePasswordKek(password, salt);
+    try {
+      await unwrapMasterKey(JSON.parse(hasWrapped), kek);
+    } catch {
+      cryptoKey = null;
+      masterKeyRaw = null;
+      throw new Error('Incorrect password.');
+    }
+    await openDatabase();
+    const check = await getSetting('__auth_check__', null);
+    if (check !== 'valid') {
+      cryptoKey = null;
+      masterKeyRaw = null;
+      throw new Error('Incorrect password.');
+    }
+  } else {
+    throw new Error('No master password is set. Use Face ID / fingerprint to unlock.');
+  }
+  await startApp();
+}
+
+async function forgotPassword() {
+  const message = [
+    'Forgot your password?',
+    '',
+    'Your entries on this device are encrypted and cannot be recovered without the password.',
+    'If you synced to a Google Sheet, those entries are safe there and can be brought back by connecting the Sheet again.',
+    '',
+    'Type ERASE to erase this device\u2019s data and start fresh.'
+  ].join('\n');
+  const input = window.prompt(message);
+  if (input === null) return;
+  if (input.trim() !== 'ERASE') {
+    alert('Nothing was erased. Type ERASE exactly to confirm.');
+    return;
+  }
+  try {
+    await new Promise((resolve) => {
+      const request = indexedDB.deleteDatabase(DB_NAME);
+      request.onsuccess = request.onerror = request.onblocked = () => resolve();
+    });
+  } catch {}
+  ['cb_salt', 'cb_key_wrapped', 'cb_key_raw', 'cb_prf_salt', 'cb_prf_cred_id', 'cb_prf_key_wrapped', 'cb_has_password', 'cb_bio_id', 'cb_bio_pwd', 'cb_bio_enabled'].forEach((key) => localStorage.removeItem(key));
+  location.reload();
+}
+
+async function setPasswordHandler() {
+  const password = elements.passwordInput.value;
+  if (!password) {
+    setSetupStatus('Enter a password first.', true);
+    return;
+  }
+  if (password.length < 10) {
+    setSetupStatus('Password must be at least 10 characters.', true);
+    return;
+  }
+  try {
+    const salt = localStorage.getItem('cb_salt') || randomSaltB64();
+    const kek = await derivePasswordKek(password, salt);
+    const wrapped = await wrapMasterKeyWith(kek);
+    localStorage.setItem('cb_salt', salt);
+    localStorage.setItem('cb_key_wrapped', JSON.stringify(wrapped));
+    localStorage.setItem('cb_has_password', 'true');
+    localStorage.removeItem('cb_key_raw');
+    elements.passwordInput.value = '';
+    setSetupStatus('Master password saved.');
+    announce('Master password set.');
+    updateSecurityUi();
+  } catch (error) {
+    setSetupStatus(error.message || 'Could not set the password.', true);
+  }
+}
+
+async function removePasswordHandler() {
+  if (!localStorage.getItem('cb_key_wrapped')) {
+    setSetupStatus('No master password is set.', true);
+    return;
+  }
+  if (!securityState().hasBiometrics) {
+    const ok = window.confirm('Remove your master password?\n\nYour cashbook will then open without any lock on this device, so anyone using this device could see your entries.');
+    if (!ok) return;
+  }
+  localStorage.removeItem('cb_key_wrapped');
+  localStorage.removeItem('cb_has_password');
+  if (!securityState().hasBiometrics && masterKeyRaw) {
+    localStorage.setItem('cb_key_raw', bytesToB64(masterKeyRaw));
+  }
+  setSetupStatus('Master password removed.');
+  announce('Master password removed.');
+  updateSecurityUi();
+}
+
+function bindEvents() {
   elements.biometricBtn.addEventListener('click', async () => {
-    elements.lockError.textContent = "Waiting for biometrics...";
+    elements.lockError.textContent = 'Waiting for Face ID / fingerprint…';
     const success = await authenticateWithBiometrics();
-    if (!success) elements.lockError.textContent = "Biometric authentication failed or cancelled.";
+    if (success) {
+      elements.lockError.textContent = '';
+      await startApp();
+    } else {
+      elements.lockError.textContent = 'Face ID / fingerprint failed or was cancelled.';
+    }
   });
 
-  elements.unlockForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
+  elements.forgotPasswordBtn.addEventListener('click', () => void forgotPassword());
+
+  elements.unlockForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
     elements.unlockBtn.disabled = true;
     elements.lockError.textContent = '';
-    const password = elements.unlockPassword.value;
-    
     try {
-      if (isFirstSetup) {
-        if (password.length < 10) throw new Error("Password must be at least 10 characters.");
-        
-        saltBase64 = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
-        localStorage.setItem('cb_salt', saltBase64);
-        cryptoKey = await deriveKey(password, saltBase64);
-        
-        await openDatabase();
-        await encryptText("test"); // Test encryption
-        await saveSetting("__auth_check__", "valid");
-        
-        await startApp();
-        
-        // Ask for biometrics setup after successful start
-        if (window.PublicKeyCredential) {
-          const setupBio = window.confirm("Would you like to enable FaceID / TouchID to unlock the app faster next time?");
-          if (setupBio) {
-            try {
-              await setupBiometrics(password);
-              elements.biometricToggle.checked = true;
-              announce('Biometrics enabled.');
-            } catch (err) {
-              alert("Could not enable biometrics: " + err.message);
-            }
-          }
-        }
-      } else {
-        cryptoKey = await deriveKey(password, saltBase64);
-        
-        await openDatabase();
-        const check = await getSetting("__auth_check__", null);
-        if (check !== "valid") {
-          cryptoKey = null;
-          throw new Error("Incorrect password.");
-        }
-        await startApp();
-      }
-    } catch (err) {
-      elements.lockError.textContent = err.message || "Failed to unlock.";
+      await unlockWithPassword(elements.unlockPassword.value);
+    } catch (error) {
+      elements.lockError.textContent = error.message || 'Failed to unlock.';
       elements.unlockPassword.value = '';
-      if (isFirstSetup) {
-        localStorage.removeItem('cb_salt');
-      }
     } finally {
       elements.unlockBtn.disabled = false;
     }
   });
 
-  elements.biometricToggle?.addEventListener('change', async (e) => {
-    if (e.target.checked) {
-      const pwd = prompt("Please enter your master password to enable biometrics:");
-      if (!pwd) { e.target.checked = false; return; }
-      
-      // Verify password before enabling
-      const salt = localStorage.getItem('cb_salt');
-      const testKey = await deriveKey(pwd, salt);
-      const oldKey = cryptoKey;
-      cryptoKey = testKey;
-      const check = await getSetting("__auth_check__", null);
-      cryptoKey = oldKey;
-
-      if (check !== "valid") {
-        alert("Incorrect password.");
-        e.target.checked = false;
-        return;
-      }
-
+  elements.biometricToggle?.addEventListener('change', async (event) => {
+    if (event.target.checked) {
       try {
-        await setupBiometrics(pwd);
-        announce('Biometrics enabled.');
-      } catch (err) {
-        alert("Could not enable biometrics: " + err.message);
-        e.target.checked = false;
+        await enableBiometrics();
+        event.target.checked = true;
+        setSetupStatus('Face ID / fingerprint enabled.');
+        announce('Face ID / fingerprint enabled.');
+      } catch (error) {
+        event.target.checked = false;
+        alert(error.message || 'Could not enable Face ID / fingerprint.');
       }
     } else {
       disableBiometrics();
-      announce('Biometrics disabled.');
+      setSetupStatus('Face ID / fingerprint disabled.');
+      announce('Face ID / fingerprint disabled.');
     }
+    updateSecurityUi();
+  });
+
+  elements.setPasswordBtn?.addEventListener('click', () => void setPasswordHandler());
+  elements.removePasswordBtn?.addEventListener('click', () => void removePasswordHandler());
+
+  elements.signOutGoogle?.addEventListener('click', async () => {
+    const ok = window.confirm('Sign out of Google?\n\nYour entries stay on this device. The connected Sheet is kept, but you will need to sign in again (or pick a different Sheet to switch accounts) to keep syncing.');
+    if (!ok) return;
+    clearSavedToken();
+    setSetupStatus('Signed out of Google. Sign in again to sync, or pick another Sheet to switch accounts.');
+    announce('Signed out of Google.');
+  });
+
+  elements.resetGoogleCreds?.addEventListener('click', async () => {
+    if (elements.clientId) elements.clientId.value = DEFAULT_CLIENT_ID;
+    if (elements.apiKey) elements.apiKey.value = DEFAULT_API_KEY;
+    if (elements.appId) elements.appId.value = DEFAULT_APP_ID;
+    await saveConfig();
+    setSetupStatus('Google credentials reset to the app defaults. Reconnect Google to apply them.');
+    announce('Google credentials reset.');
   });
 
   elements.lockNowBtn?.addEventListener('click', lockApp);
@@ -1822,7 +2052,7 @@ async function initialize() {
   });
 
   // Reset idle timer on user activity
-  ['click', 'keydown', 'mousemove', 'touchstart'].forEach(evt => 
+  ['click', 'keydown', 'mousemove', 'touchstart'].forEach((evt) =>
     document.addEventListener(evt, resetIdleTimer)
   );
 
@@ -1830,6 +2060,58 @@ async function initialize() {
     navigator.serviceWorker.register('./sw.js').catch(() => {
       elements.storageStatus.textContent = 'Local storage ready · offline app shell not installed yet';
     });
+  }
+}
+
+async function initialize() {
+  // Always clear the old insecure biometric password left by previous versions.
+  ['cb_bio_id', 'cb_bio_pwd', 'cb_bio_enabled'].forEach((key) => localStorage.removeItem(key));
+
+  bindEvents();
+
+  const salt = localStorage.getItem('cb_salt');
+  const hasWrapped = localStorage.getItem('cb_key_wrapped');
+  const hasRaw = localStorage.getItem('cb_key_raw');
+  const hasPrf = localStorage.getItem('cb_prf_key_wrapped');
+  const isLegacy = !!salt && !hasWrapped && !hasRaw && !hasPrf;
+
+  if (isLegacy) {
+    elements.lockMessage.textContent = 'Enter your master password to unlock your encrypted cashbook.';
+    showLockScreen('password');
+    return;
+  }
+
+  if (hasWrapped || hasPrf) {
+    elements.lockMessage.textContent = hasWrapped
+      ? 'Enter your master password to unlock your encrypted cashbook.'
+      : 'Use Face ID / fingerprint to unlock your cashbook.';
+    showLockScreen(hasWrapped && hasPrf ? 'both' : hasWrapped ? 'password' : 'biometrics');
+    return;
+  }
+
+  if (hasRaw) {
+    // Unprotected device: open straight to the cashbook.
+    try {
+      await setMasterKeyFromBytes(b64ToBytes(hasRaw));
+      await openDatabase();
+      await startApp();
+    } catch (error) {
+      console.error('Could not open the local cashbook', error);
+      elements.storageStatus.textContent = 'Could not read local data.';
+    }
+    return;
+  }
+
+  // Brand-new device: create a random key and open without a password.
+  try {
+    await generateMasterKey();
+    localStorage.setItem('cb_key_raw', bytesToB64(masterKeyRaw));
+    await openDatabase();
+    await saveSetting('__auth_check__', 'valid');
+    await startApp();
+  } catch (error) {
+    console.error('Setup failed', error);
+    elements.lockMessage.textContent = 'Could not initialize local storage.';
   }
 }
 

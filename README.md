@@ -11,18 +11,21 @@ An offline-first personal cashbook built as an installable Progressive Web App (
 - Retry pending uploads when connectivity returns, while the app is open and Google access is valid.
 - Avoid duplicate rows on retry with an offline entry ID.
 - Cache the app shell so it can open offline after the first online visit.
+- A master password is **optional**. The app opens straight to your cashbook; turn a lock on from Settings → Security & Locking.
+- Unlock with **Face ID / Touch ID / fingerprint** using your browser's passkey. The password itself is never stored on the device.
+- Forgot your password? Erase this device's data, then reconnect your Google Sheet to bring back synced entries.
 
 ## Google Sheets connection
 
 The app uses Google Identity Services and Google Picker with the per-file `drive.file` permission. It asks to use only the spreadsheet selected in Picker, instead of requesting access to every spreadsheet. See Google's [Drive scopes guide](https://developers.google.com/workspace/drive/api/guides/api-specific-auth) and [Google Picker guide](https://developers.google.com/workspace/drive/picker/guides/web-picker?hl=en).
 
-Before connecting, configure an HTTPS origin and a Google Cloud project with the Google Sheets API and Google Picker API enabled. Create a web OAuth client, an API key restricted to the app's origin and Picker API, and note the project number. Enter those values in the app's local settings. They are not embedded in this repository.
+Before connecting, configure an HTTPS origin and a Google Cloud project with the Google Sheets API and Google Picker API enabled. Create a web OAuth client, an API key restricted to the app's origin and Picker API, and note the project number. The app ships with shared default credentials, but you can replace them under **Settings → Google Cloud credentials (change your Google ID)**.
 
 The starter settings use NPR to match the original cashbook, but the app can be set to another supported currency before the first entry. Change the currency under **Cashbook settings and Google Sheets sync**. After entries exist on a device, the app locks that device to the saved currency to protect its totals; use a separate browser profile or clear the local records only after syncing them to start a different cashbook in another currency.
 
 The app defaults to a response tab named `Form responses 1` and a dashboard tab named `Dashboard`. The response tab needs headers for Timestamp, Money Came In, Money Went Out, and Remarks. If the amount headers include a currency code such as `(USD)`, that code must match the app setting. Keep one currency per sheet so the totals remain meaningful. On first sync, after validating those headers, the app adds an `Offline Entry ID` header to the next empty column and appends cashbook rows there. It reads the starting balance from `Dashboard!B13` in the selected currency; if that cell is blank, the balance starts at zero. It does not set or change the starting balance.
 
-Google access tokens stay in memory and are not saved on the device. After closing the app, switching devices, or token expiry, connect Google again. If the app was closed when the network returned, queued entries sync when the app is opened and connected again.
+Google access tokens are kept in the tab's session storage and are discarded when the tab closes. After closing the app, switching devices, or token expiry, connect Google again. If the app was closed when the network returned, queued entries sync when the app is opened and connected again.
 
 ## Install and host
 
