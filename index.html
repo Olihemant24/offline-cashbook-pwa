@@ -54,7 +54,7 @@
       <section class="sync-strip" aria-live="polite">
         <span class="online-dot" id="onlineDot" aria-hidden="true"></span>
         <div class="sync-copy">
-          <strong id="syncTitle">Offline-ready</strong>
+          <strong id="syncTitle">Saved on this device</strong>
           <span id="syncMessage">Your entries save on this device. Connect a Google Sheet to sync.</span>
         </div>
         <button class="text-button" id="syncNow" type="button" hidden>Sync now</button>
@@ -210,7 +210,7 @@
           </div>
 
           <details class="developer-settings" id="devSettings">
-            <summary>Google Cloud credentials (change your Google ID)</summary>
+            <summary>Advanced: Google Cloud project (developers only)</summary>
             <p class="dev-intro">Most people never need this. The app ships with shared defaults. To use your own Google Cloud project, paste its OAuth client ID, API key, and project number, then Save and reconnect.</p>
             <div class="settings-fields" style="margin-top: 10px;">
               <label class="field">
@@ -246,6 +246,11 @@
             <button class="secondary-button" id="createNewSheet" type="button">Create a new Sheet</button>
             <button class="primary-button" id="connectGoogle" type="button">Sign in &amp; sync</button>
             <button class="secondary-button" id="signOutGoogle" type="button">Sign out</button>
+          </div>
+          <div style="margin: 14px 0; padding: 14px 16px; background: #f9f9f7; border: 1px solid #e5e4dc; border-radius: 12px;">
+            <h3 style="margin: 0 0 6px 0; font-size: 14px; color: #202b27;">Google account</h3>
+            <p class="dev-intro" style="margin: 0 0 10px 0;">Want to back up to a different Google account? Your entries stay on this device and are uploaded to the new account’s Sheet. Your current Sheet is left untouched.</p>
+            <button class="secondary-button" id="switchGoogleAccount" type="button">Use a different Google account</button>
           </div>
           <p class="setup-status" id="setupStatus" role="status" aria-live="polite">Not connected yet.</p>
           <p class="sheet-change-note">When you first sync, the app checks the existing headers and adds one “Offline Entry ID” header to the next empty column. This ID lets it safely retry without duplicating a transaction. It appends rows to your response tab and reads the starting balance from Dashboard!B13.</p>

@@ -9,7 +9,7 @@ const PERIODS_TAB = 'Cashbook Periods';
 const DEFAULT_CLIENT_ID = '1017685550464-um4md5jhrbki0gbna4d7b0osmliuddqm.apps.googleusercontent.com';
 const DEFAULT_API_KEY = 'AIzaSyCBYJek40PIcM2Qr8dGJHpYto12SH9qBH8';
 const DEFAULT_APP_ID = '1017685550464';
-const APP_BUILD = 27;
+const APP_BUILD = 29;
 
 let dbPromise;
 let accessToken = null;
@@ -110,13 +110,23 @@ async function createPrfCredential(saltBytes) {
       rp: { name: 'My Cashbook' },
       user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'cashbook-user', displayName: 'Cashbook User' },
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
-      authenticatorSelection: { userVerification: 'required', residentKey: 'preferred' },
+      // "platform" = this device's own Face ID / Touch ID / fingerprint, not a phone QR code or a USB key.
+      authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred' },
       extensions: { prf: { eval: { first: saltBytes } } }
     }
   });
-  const output = credential.getClientExtensionResults?.()?.prf?.results?.first;
-  if (!output) throw new Error('This device or browser does not support secure Face ID / fingerprint unlock.');
-  return { credId: new Uint8Array(credential.rawId), prfBytes: new Uint8Array(output) };
+  const prf = credential.getClientExtensionResults?.()?.prf;
+  if (!prf || (!prf.enabled && !prf.results?.first)) {
+    throw new Error('This device or browser does not support secure Face ID / fingerprint unlock.');
+  }
+  const credId = new Uint8Array(credential.rawId);
+  let output = prf.results?.first;
+  if (!output) {
+    // Some passkey providers (for example Safari with iCloud Keychain) only say "supported" when the passkey is
+    // created. The secret comes from a second Face ID / fingerprint check right away.
+    output = await getPrfBytes(credId, saltBytes);
+  }
+  return { credId, prfBytes: new Uint8Array(output) };
 }
 
 async function getPrfBytes(credIdBytes, saltBytes) {
@@ -141,6 +151,7 @@ async function enableBiometrics() {
   try {
     cred = await createPrfCredential(saltBytes);
   } catch (err) {
+    if (err?.name === 'NotAllowedError') throw new Error('Face ID / fingerprint was cancelled or not allowed. Nothing was changed.');
     throw new Error(err?.message || 'Could not enable Face ID / fingerprint.');
   }
   const kek = await importAesKey(cred.prfBytes);
@@ -246,6 +257,7 @@ function clearSavedToken() {
 
 let cachedConfig = null;
 let lastSyncFinishedAt = 0;
+const CHOOSE_ACCOUNT_KEY = 'cb_choose_account'; // set by "switch account" / "sign out": next sign-in shows the account chooser
 
 function tokenIsValid() {
   return Boolean(accessToken) && tokenExpiresAt > Date.now() + 60000;
@@ -283,7 +295,7 @@ const elements = {
   transactionList: $('transactionList'), recordCount: $('recordCount'), historyFootnote: $('historyFootnote'), storageStatus: $('storageStatus'),
   settingsToggle: $('settingsToggle'), settingsPanel: $('settingsPanel'), archivePanel: $('archivePanel'), clientId: $('clientId'), apiKey: $('apiKey'), appId: $('appId'), spreadsheetInput: $('spreadsheetInput'), responseTab: $('responseTab'), dashboardTab: $('dashboardTab'),
   currencyCode: $('currencyCode'), saveSettings: $('saveSettings'), chooseGoogleSheet: $('chooseGoogleSheet'), createNewSheet: $('createNewSheet'), connectGoogle: $('connectGoogle'), setupStatus: $('setupStatus'), toast: $('toast'),
-  onboardingCard: $('onboardingCard'), onboardCurrency: $('onboardCurrency'), startCreateSheet: $('startCreateSheet'), startChooseSheet: $('startChooseSheet'), onboardingStatus: $('onboardingStatus'), openSheetLink: $('openSheetLink'),
+  onboardingCard: $('onboardingCard'), switchGoogleAccount: $('switchGoogleAccount'), onboardCurrency: $('onboardCurrency'), startCreateSheet: $('startCreateSheet'), startChooseSheet: $('startChooseSheet'), onboardingStatus: $('onboardingStatus'), openSheetLink: $('openSheetLink'),
   carryBalance: $('carryBalance'), archiveName: $('archiveName'), archiveNow: $('archiveNow'), archiveStatus: $('archiveStatus'),
   biometricToggle: $('biometricToggle'), lockNowBtn: $('lockNowBtn'), securityStatus: $('securityStatus'), passwordInput: $('passwordInput'), setPasswordBtn: $('setPasswordBtn'), removePasswordBtn: $('removePasswordBtn'), signOutGoogle: $('signOutGoogle'), resetGoogleCreds: $('resetGoogleCreds')
 };
@@ -628,11 +640,11 @@ async function refreshView() {
   const hasSheet = Boolean(cachedConfig?.spreadsheetId);
   updateOnboarding();
   if (!navigator.onLine) {
-    setSyncStatus(pending ? 'Saved offline' : 'Offline-ready', pending ? `${pending} ${pending === 1 ? 'entry is' : 'entries are'} waiting on this device.` : 'Your saved cashbook is available on this device.', 'offline');
+    setSyncStatus(pending ? 'Saved offline' : 'You are offline', pending ? `${pending} ${pending === 1 ? 'entry is' : 'entries are'} waiting on this device.` : 'Your saved cashbook is available on this device.', 'offline');
   } else if (pending) {
     setSyncStatus('Waiting to sync', `${pending} ${pending === 1 ? 'entry is' : 'entries are'} saved here. ${hasSheet ? 'Tap “Sync now” to send them to your Sheet.' : 'Connect a Google Sheet to back them up.'}`, 'pending');
   } else if (!hasSheet) {
-    setSyncStatus('Offline-ready', 'Your entries save on this device. Connect a Google Sheet to back them up.', 'ready');
+    setSyncStatus('Saved on this device', 'Your entries are stored on this device. Connect a Google Sheet to back them up.', 'ready');
   } else if (!tokenIsValid()) {
     setSyncStatus('Google Sheet connected', 'Everything is saved. Tap “Sync now” any time to refresh your Sheet.', 'pending');
   } else {
@@ -762,6 +774,9 @@ async function connectGoogle() {
   }
 }
 function requestGoogleToken(config, promptMode = '') {
+  let wantsChooser = false;
+  try { wantsChooser = localStorage.getItem(CHOOSE_ACCOUNT_KEY) === '1'; } catch {}
+  const prompt = wantsChooser ? 'select_account' : promptMode;
   return loadGoogleIdentity().then(() => new Promise((resolve, reject) => {
     const client = window.google.accounts.oauth2.initTokenClient({
       client_id: config.clientId,
@@ -772,11 +787,12 @@ function requestGoogleToken(config, promptMode = '') {
           return;
         }
         saveToken(response.access_token, response.expires_in);
+        try { localStorage.removeItem(CHOOSE_ACCOUNT_KEY); } catch {}
         resolve(response.access_token);
       },
       error_callback: (error) => reject(new Error(error.message || 'Google permission was closed.'))
     });
-    client.requestAccessToken({ prompt: promptMode });
+    client.requestAccessToken({ prompt });
   }));
 }
 function loadGooglePicker() {
@@ -881,7 +897,7 @@ async function chooseGoogleSheet() {
   }
 }
 
-function buildDashboardValues(config) {
+function buildDashboardValues(config, startingBalance = 0) {
   const tab = quoteSheetName(config.responseTab);
   const thisMonth = (column) => `=SUMIFS(${tab}!${column}:${column},${tab}!A:A,">="&EOMONTH(TODAY(),-1)+1,${tab}!A:A,"<"&EOMONTH(TODAY(),0)+1)`;
   return [
@@ -897,7 +913,7 @@ function buildDashboardValues(config) {
     ['Net Movement This Month', '=B8-B9'],
     ['', ''],
     ['Starting balance (set it in B13)', ''],
-    ['', 0]
+    ['', startingBalance || 0]
   ];
 }
 async function styleNewSheet(config, created) {
@@ -1028,7 +1044,7 @@ async function createNewSpreadsheet() {
     });
     await sheetsRequest(sheetValuesUrl(spreadsheetId, `${quoteSheetName(config.dashboardTab)}!A1:B13`, 'valueInputOption=USER_ENTERED'), {
       method: 'PUT',
-      body: JSON.stringify({ majorDimension: 'ROWS', values: buildDashboardValues(config) })
+      body: JSON.stringify({ majorDimension: 'ROWS', values: buildDashboardValues(config, (Number(await getSetting('startingBalanceMinor', 0)) || 0) / currencyScale(config.currencyCode)) })
     });
     try { await styleNewSheet(config, created); } catch { /* cosmetic only */ }
 
@@ -1782,6 +1798,30 @@ function resetIdleTimer() {
   idleTimeout = setTimeout(() => lockApp(), 5 * 60 * 1000); // 5 minutes
 }
 
+// Tells the truth about offline mode: checks that the browser has really saved the app files.
+async function updateOfflineStatus() {
+  const build = `build ${APP_BUILD}`;
+  if (!elements.storageStatus) return;
+  elements.storageStatus.textContent = `Checking offline files… · ${build}`;
+  if (!('serviceWorker' in navigator) || !('caches' in window)) {
+    elements.storageStatus.textContent = `Offline mode is not supported in this browser · ${build}`;
+    return;
+  }
+  const active = await Promise.race([
+    navigator.serviceWorker.ready.then(() => true).catch(() => false),
+    new Promise((resolve) => setTimeout(() => resolve(false), 10000))
+  ]);
+  let saved = active;
+  if (active) {
+    for (const url of ['./', './app.js', './styles.css']) {
+      if (!(await caches.match(url, { ignoreSearch: true }))) { saved = false; break; }
+    }
+  }
+  elements.storageStatus.textContent = saved
+    ? `Works offline ✓ · ${build}`
+    : `Offline files not saved yet. Open the app once while online. · ${build}`;
+}
+
 async function startApp() {
   elements.lockScreen.style.display = 'none';
   elements.appShell.style.display = 'block';
@@ -1797,6 +1837,7 @@ async function startApp() {
   if (navigator.onLine) void loadGoogleIdentity().catch(() => {});
 
   void autoSync();
+  void updateOfflineStatus();
   resetIdleTimer(); // Start the inactivity timer
 }
 
@@ -1811,14 +1852,18 @@ async function readAllRaw(storeName) {
 }
 
 async function migrateFromLegacy(legacyKey) {
-  // Switch to a random master key and re-encrypt everything under it.
-  await generateMasterKey();
+  // Switch to a random master key and re-encrypt everything under it. The new key is saved (wrapped by the
+  // password key) BEFORE any data is rewritten, so if the tab closes half-way the next unlock can carry on.
+  if (!masterKeyRaw) {
+    await generateMasterKey();
+    localStorage.setItem('cb_key_pending', JSON.stringify(await wrapMasterKeyWith(legacyKey)));
+  }
   const transactions = await readAllRaw(STORE_TRANSACTIONS);
   for (const record of transactions) {
     let payload = record;
     if (record.encrypted) {
       const plaintext = await decryptText(record.encrypted, legacyKey);
-      if (plaintext == null) continue;
+      if (plaintext == null) continue; // already moved to the new key
       try { payload = JSON.parse(plaintext); } catch { continue; }
       payload.id = record.id; // keyPath lives outside the encrypted payload
     }
@@ -1829,7 +1874,7 @@ async function migrateFromLegacy(legacyKey) {
     let value;
     if (setting.encrypted) {
       const plaintext = await decryptText(setting.encrypted, legacyKey);
-      if (plaintext == null) continue;
+      if (plaintext == null) continue; // already moved to the new key
       try { value = JSON.parse(plaintext); } catch { continue; }
     } else if (setting.value !== undefined) {
       value = setting.value;
@@ -1841,6 +1886,7 @@ async function migrateFromLegacy(legacyKey) {
   const wrapped = await wrapMasterKeyWith(legacyKey);
   localStorage.setItem('cb_key_wrapped', JSON.stringify(wrapped));
   localStorage.setItem('cb_has_password', 'true');
+  localStorage.removeItem('cb_key_pending');
 }
 
 async function unlockWithPassword(password) {
@@ -1853,9 +1899,20 @@ async function unlockWithPassword(password) {
     // Old scheme: data was encrypted directly with the PBKDF2 key.
     const legacyKey = await derivePasswordKek(password, salt);
     cryptoKey = legacyKey;
+    masterKeyRaw = null;
     await openDatabase();
-    const check = await getSetting('__auth_check__', null);
-    if (check !== 'valid') {
+    let passwordOk = (await getSetting('__auth_check__', null)) === 'valid'; // data still under the old key
+    const pending = localStorage.getItem('cb_key_pending');
+    if (pending) {
+      // An earlier upgrade was interrupted: some data may already be under the new master key. Reuse that key.
+      try {
+        await unwrapMasterKey(JSON.parse(pending), legacyKey);
+        passwordOk = true;
+      } catch {
+        /* wrong password: the old-key check above decides */
+      }
+    }
+    if (!passwordOk) {
       cryptoKey = null;
       masterKeyRaw = null;
       throw new Error('Incorrect password.');
@@ -1881,6 +1938,41 @@ async function unlockWithPassword(password) {
     throw new Error('No master password is set. Use Face ID / fingerprint to unlock.');
   }
   await startApp();
+}
+
+// Use a different Google account: forget the current Sheet, keep this device's entries, and upload this
+// period's entries to the new account's Sheet. Entries already in a Sheet are matched by ID, so picking the
+// same Sheet again never creates duplicates.
+async function switchGoogleAccount() {
+  const ok = window.confirm(
+    'Use a different Google account?\n\n' +
+    '• Your current Google Sheet is NOT changed or deleted.\n' +
+    '• Your entries stay on this device.\n' +
+    '• This period’s entries will be uploaded to the Sheet you create or pick with the new account.\n\n' +
+    'Continue?'
+  );
+  if (!ok) return;
+  try {
+    clearSavedToken();
+    localStorage.setItem(CHOOSE_ACCOUNT_KEY, '1');
+    const saved = await getSetting('googleConfig', {});
+    await saveSetting('googleConfig', { ...saved, spreadsheetId: '', spreadsheetName: '' });
+    if (elements.spreadsheetInput) {
+      elements.spreadsheetInput.dataset.spreadsheetId = '';
+      elements.spreadsheetInput.dataset.spreadsheetName = '';
+      elements.spreadsheetInput.value = '';
+    }
+    for (const record of await getActiveRecords()) {
+      if (record.syncState !== 'pending') await putTransaction({ ...record, syncState: 'pending' });
+    }
+    lastSyncFinishedAt = 0;
+    await refreshView();
+    setSetupStatus('Ready for a new account. Create a new Sheet, or pick one, and choose the Google account when asked.');
+    announce('Choose your new Google account below.');
+    elements.onboardingCard?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } catch (error) {
+    setSetupStatus(error.message || 'Could not switch accounts.', true);
+  }
 }
 
 async function forgotPassword() {
@@ -1984,6 +2076,10 @@ function bindEvents() {
 
   elements.biometricToggle?.addEventListener('change', async (event) => {
     if (event.target.checked) {
+      if (!securityState().hasPassword && !window.confirm('Use Face ID / fingerprint without a password?\n\nIf you later lose this passkey (new phone, reset browser, deleted passkey), this device’s entries cannot be unlocked. Entries already synced to your Google Sheet stay safe there. Setting a password too gives you a second way in.\n\nContinue?')) {
+        event.target.checked = false;
+        return;
+      }
       try {
         await enableBiometrics();
         event.target.checked = true;
@@ -2005,12 +2101,16 @@ function bindEvents() {
   elements.removePasswordBtn?.addEventListener('click', () => void removePasswordHandler());
 
   elements.signOutGoogle?.addEventListener('click', async () => {
-    const ok = window.confirm('Sign out of Google?\n\nYour entries stay on this device. The connected Sheet is kept, but you will need to sign in again (or pick a different Sheet to switch accounts) to keep syncing.');
+    const ok = window.confirm('Sign out of Google on this app?\n\nYour entries stay on this device and your Sheet stays connected. Next time you sign in you will be asked which Google account to use.');
     if (!ok) return;
     clearSavedToken();
-    setSetupStatus('Signed out of Google. Sign in again to sync, or pick another Sheet to switch accounts.');
+    try { localStorage.setItem(CHOOSE_ACCOUNT_KEY, '1'); } catch {}
+    await refreshView();
+    setSetupStatus('Signed out. Tap “Sign in & sync” to continue.');
     announce('Signed out of Google.');
   });
+
+  elements.switchGoogleAccount?.addEventListener('click', () => void switchGoogleAccount());
 
   elements.resetGoogleCreds?.addEventListener('click', async () => {
     if (elements.clientId) elements.clientId.value = DEFAULT_CLIENT_ID;
@@ -2058,7 +2158,7 @@ function bindEvents() {
 
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     navigator.serviceWorker.register('./sw.js').catch(() => {
-      elements.storageStatus.textContent = 'Local storage ready · offline app shell not installed yet';
+      elements.storageStatus.textContent = `Offline mode could not start in this browser · build ${APP_BUILD}`;
     });
   }
 }
