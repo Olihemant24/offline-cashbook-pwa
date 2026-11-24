@@ -9,7 +9,7 @@ const PERIODS_TAB = 'Cashbook Periods';
 const DEFAULT_CLIENT_ID = '1017685550464-um4md5jhrbki0gbna4d7b0osmliuddqm.apps.googleusercontent.com';
 const DEFAULT_API_KEY = 'AIzaSyCBYJek40PIcM2Qr8dGJHpYto12SH9qBH8';
 const DEFAULT_APP_ID = '1017685550464';
-const APP_BUILD = 31;
+const APP_BUILD = 32;
 
 let dbPromise;
 let accessToken = null;
@@ -280,7 +280,6 @@ async function loadBooks() {
     books = [first];
     await saveSetting(BOOKS_KEY, books);
     await saveSetting(CURRENT_BOOK_KEY, first.id);
-    // Migrate legacy global period/balance to the first book
     const legacyPeriod = await getSetting('periodStartIso', null);
     if (legacyPeriod) await saveSetting(`periodStart:${first.id}`, legacyPeriod);
     const legacyBalance = await getSetting('startingBalanceMinor', null);
@@ -326,7 +325,7 @@ async function createBook(name) {
   const trimmed = String(name || '').trim();
   if (!trimmed) throw new Error('Enter a name for the new book.');
   if (books.some((b) => b.name.toLowerCase() === trimmed.toLowerCase())) throw new Error(`A book called “${trimmed}” already exists.`);
-  const book = { id: newBookId(), name: trimmed, spreadsheetId: '', spreadsheetName: '', responseTab: 'Form responses 1', dashboardTab: 'Dashboard' };
+  const book = { id: newBookId(), name: trimmed, spreadsheetId: '', spreadsheetName: '', responseTab: trimmed, dashboardTab: 'Dashboard' };
   books.push(book);
   await saveBooks();
   await switchBook(book.id);
@@ -383,10 +382,7 @@ function renderBookSwitcher() {
     const expected = b.spreadsheetId ? `${b.name} ✓` : b.name;
     return opt.textContent !== expected;
   });
-  if (idsMatch && !namesChanged) {
-    select.value = currentBookId;
-    return;
-  }
+  if (idsMatch && !namesChanged) { select.value = currentBookId; return; }
   const hadFocus = document.activeElement === select;
   select.replaceChildren();
   for (const book of books) {
@@ -407,7 +403,22 @@ function renderBooksList() {
     row.className = 'books-list-row';
     const name = document.createElement('span');
     name.className = 'books-list-name';
-    name.textContent = book.name;
+    name.textContent = book.name + (book.spreadsheetId ? ' ✓' : '');
+    name.title = book.spreadsheetId ? (book.spreadsheetName || book.spreadsheetId) : 'No Google Sheet yet';
+    row.append(name);
+    if (!book.spreadsheetId) {
+      const create = document.createElement('button');
+      create.type = 'button';
+      create.className = 'text-button';
+      create.textContent = 'Create Sheet';
+      create.onclick = async () => {
+        try {
+          if (book.id !== currentBookId) await switchBook(book.id);
+          await createNewSpreadsheet();
+        } catch (e) { /* reported via setupStatus */ }
+      };
+      row.append(create);
+    }
     const rename = document.createElement('button');
     rename.type = 'button';
     rename.className = 'text-button';
@@ -446,7 +457,7 @@ function renderBooksList() {
         announce(`Deleted “${book.name}”.`);
       } catch (error) { alert(error.message || 'Could not delete the book.'); }
     };
-    row.append(name, rename, del);
+    row.append(rename, del);
     list.append(row);
   }
 }
@@ -535,7 +546,7 @@ async function createTransaction(event) {
     elements.transactionForm.reset();
     setFeedback(`Saved to ${activeBook().name} at ${localTimeLabel(record)}.`);
     await refreshView();
-    if (navigator.onLine && accessToken && tokenExpiresAt > Date.now() + 15000) {
+    if (navigator.onLine && accessToken && tokenExpiresAt > Date.now() + 15000 && activeBook()?.spreadsheetId) {
       void syncBookToSheet(activeBook()).catch(() => {});
     } else if (navigator.onLine) {
       setSyncStatus('Saved on this device', 'Connect Google to upload this entry to your Sheet.', 'pending');
@@ -614,7 +625,7 @@ async function refreshView() {
   } else if (pending) {
     setSyncStatus('Waiting to sync', `${pending} ${pending === 1 ? 'entry is' : 'entries are'} saved here. ${hasSheet ? 'Tap “Sync now” to send them to your Sheet.' : 'Connect a Google Sheet to back them up.'}`, 'pending');
   } else if (!hasSheet) {
-    setSyncStatus('Saved on this device', `“${activeBook()?.name || 'This book'}” has no Sheet yet. Connect one to back it up.`, 'ready');
+    setSyncStatus('Saved on this device', `“${activeBook()?.name || 'This book'}” has no Sheet yet. Tap “Create a new Sheet” in Settings.`, 'pending');
   } else if (!tokenIsValid()) {
     setSyncStatus('Google Sheet connected', 'Everything is saved. Tap “Sync now” any time to refresh your Sheet.', 'pending');
   } else {
@@ -762,6 +773,24 @@ function showGoogleSheetPicker(config, token) {
     } catch (error) { reject(error); }
   }));
 }
+function showFolderPicker(config, token) {
+  return loadGooglePicker().then(() => new Promise((resolve, reject) => {
+    try {
+      const view = new window.google.picker.DocsView(window.google.picker.ViewId.FOLDERS);
+      view.setSelectFolderEnabled(true);
+      view.setIncludeFolders(true);
+      const picker = new window.google.picker.PickerBuilder()
+        .setAppId(config.appId).setDeveloperKey(config.apiKey).setOAuthToken(token)
+        .setOrigin(window.location.origin).setTitle('Choose a folder for this book').addView(view)
+        .setCallback((data) => {
+          if (data.action === window.google.picker.Action.PICKED) resolve(data.docs?.[0]?.id || null);
+          if (data.action === window.google.picker.Action.CANCEL) resolve(null);
+        })
+        .build();
+      picker.setVisible(true);
+    } catch (error) { reject(error); }
+  }));
+}
 async function chooseGoogleSheet() {
   if (!navigator.onLine) { setSetupStatus('Choose a Google Sheet while online. Offline entries will remain saved here.', true); return; }
   try { await ensureSignedIn(); }
@@ -779,7 +808,6 @@ async function chooseGoogleSheet() {
     if (!selected) { setSetupStatus('No Sheet selected. Tap “Create New Sheet” to make a fresh cashbook Sheet.'); return; }
     config.spreadsheetId = selected.id;
     config.spreadsheetName = selected.name || 'Selected Sheet';
-    // Auto-detect tab names from the picked sheet.
     try {
       const tabs = await readSheetTabs({ ...config, spreadsheetId: config.spreadsheetId });
       const titles = tabs.map((t) => t.title);
@@ -798,6 +826,44 @@ async function chooseGoogleSheet() {
     await syncAllBooks();
   } catch (error) { clearSavedToken(); setSetupStatus(error.message || 'Could not select the Google Sheet.', true); }
   finally { elements.chooseGoogleSheet.disabled = false; }
+}
+
+// ===== DRIVE FOLDER HELPERS =====
+async function createDriveFolder(name) {
+  if (!accessToken || tokenExpiresAt <= Date.now() + 5000) throw new Error('Google access expired.');
+  const res = await fetch('https://www.googleapis.com/drive/v3/files?fields=id', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: String(name || 'New folder'), mimeType: 'application/vnd.google-apps.folder' })
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { if (res.status === 401) clearSavedToken(); throw new Error(body.error?.message || `Could not create folder (${res.status}).`); }
+  return body.id;
+}
+async function moveFileToFolder(fileId, folderId) {
+  if (!accessToken || !folderId) return;
+  try {
+    await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?addParents=${encodeURIComponent(folderId)}&removeParents=root&fields=id,parents`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+  } catch {}
+}
+async function askWhereToSave(config) {
+  if (!window.confirm('Save this Sheet in a folder?\n\nYes = choose or create a folder.\nNo = save in My Drive (root).')) return null;
+  const choice = window.prompt(
+    `Folder for this Sheet:\n\n` +
+    `• Type a NEW folder name to create it and save inside.\n` +
+    `• Type “pick” to choose an existing folder.\n` +
+    `• Leave empty to save in My Drive (root).`,
+    activeBook()?.name || ''
+  );
+  if (!choice) return null;
+  if (choice.toLowerCase() === 'pick') {
+    try { return await showFolderPicker(config, accessToken); } catch { return null; }
+  }
+  try { return await createDriveFolder(choice); }
+  catch (error) { setSetupStatus(error.message || 'Could not create the folder.', true); return null; }
 }
 
 // ===== DASHBOARD / SHEET CREATION =====
@@ -842,11 +908,9 @@ async function styleNewSheet(config, created) {
     width(dashboardId, 0, 1, 280), width(dashboardId, 1, 2, 180)
   ]);
 }
-function defaultSheetTitle(date = new Date()) {
-  const pad = (n) => String(n).padStart(2, '0');
-  return `My Cashbook ${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}${pad(date.getMinutes())}`;
-}
-async function createNewSpreadsheet() {
+
+async function createNewSpreadsheet(options = {}) {
+  const { syncAfter = true, skipConfirm = false, askFolder = true } = options;
   if (!navigator.onLine) { setSetupStatus('You are offline. Creating a Sheet needs the internet. Your saved entries stay on this device.', true); return; }
   try { await ensureSignedIn(); }
   catch (error) { setSetupStatus(error.message || 'Google sign-in was not completed.', true); return; }
@@ -854,27 +918,49 @@ async function createNewSpreadsheet() {
   if (!config.clientId || !config.apiKey || !config.appId) { setSetupStatus('Google credentials missing. Please check settings.', true); elements.settingsPanel.open = true; return; }
   try { await persistCurrencyCode(config.currencyCode); }
   catch (error) { setSetupStatus(error.message || 'Check the currency code.', true); return; }
-  const existing = await getActiveBookRecords();
-  if (existing.length) {
-    const proceed = window.confirm('Create a brand new Google Sheet for this book?\n\n• A new spreadsheet is created in your Google Drive.\n• The Sheet is set up with the right headers and a Dashboard tab.\n• Entries already saved on this device stay here; only unsynced entries are uploaded to the new Sheet.\n\nContinue?');
-    if (!proceed) { setSetupStatus('Cancelled. Nothing was created.'); return; }
+
+  if (!skipConfirm) {
+    const existing = await getActiveBookRecords();
+    if (existing.length) {
+      const proceed = window.confirm('Create a brand new Google Sheet for this book?\n\n• A new spreadsheet is created in your Google Drive.\n• The Sheet is set up with the right headers and a Dashboard tab.\n• Entries already saved on this device stay here; only unsynced entries are uploaded to the new Sheet.\n\nContinue?');
+      if (!proceed) { setSetupStatus('Cancelled. Nothing was created.'); return; }
+    }
   }
+
+  let parentFolderId = null;
+  if (askFolder) parentFolderId = await askWhereToSave(config);
+
   elements.createNewSheet.disabled = true; elements.chooseGoogleSheet.disabled = true;
   setSetupStatus('Checking Google access…');
   try {
     const saved = await getSetting('googleConfig', {});
     await saveSetting('googleConfig', { ...saved, clientId: config.clientId, apiKey: config.apiKey, appId: config.appId, currencyCode: config.currencyCode });
-    const title = defaultSheetTitle();
+
+    const book = activeBook();
+    const bookName = book.name;
+    const title = `My Cashbook — ${bookName}`;
+    const responseTab = (config.responseTab && config.responseTab !== 'Form responses 1' && config.responseTab !== 'Form responses')
+      ? config.responseTab
+      : bookName;
+    const dashboardTab = config.dashboardTab || 'Dashboard';
+    config.responseTab = responseTab;
+    config.dashboardTab = dashboardTab;
+    if (elements.responseTab) elements.responseTab.value = responseTab;
+    if (elements.dashboardTab) elements.dashboardTab.value = dashboardTab;
+
     setSetupStatus('Creating a new spreadsheet in your Drive…');
     const res = await fetch('https://sheets.googleapis.com/v4/spreadsheets', {
       method: 'POST',
       headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ properties: { title }, sheets: [{ properties: { title: config.responseTab } }, { properties: { title: config.dashboardTab } }] })
+      body: JSON.stringify({ properties: { title }, sheets: [{ properties: { title: responseTab } }, { properties: { title: dashboardTab } }] })
     });
     const created = await res.json().catch(() => ({}));
     if (!res.ok) { if (res.status === 401) clearSavedToken(); throw new Error(created.error?.message || `Google returned ${res.status}.`); }
     const spreadsheetId = created.spreadsheetId;
     if (!spreadsheetId) throw new Error('Google did not return the new spreadsheet ID.');
+
+    if (parentFolderId) await moveFileToFolder(spreadsheetId, parentFolderId);
+
     config.spreadsheetId = spreadsheetId;
     config.spreadsheetName = created.properties?.title || title;
     elements.spreadsheetInput.dataset.spreadsheetId = config.spreadsheetId;
@@ -887,9 +973,9 @@ async function createNewSpreadsheet() {
     const sb = Number(await getSetting(`startingBalance:${currentBookId}`, 0)) || 0;
     await sheetsRequest(sheetValuesUrl(spreadsheetId, `${quoteSheetName(config.dashboardTab)}!A1:B13`, 'valueInputOption=USER_ENTERED'), { method: 'PUT', body: JSON.stringify({ majorDimension: 'ROWS', values: buildDashboardValues(config, sb / currencyScale(config.currencyCode)) }) });
     try { await styleNewSheet(config, created); } catch {}
-    setSetupStatus(`Created “${config.spreadsheetName}” for ${activeBook().name}. Syncing your saved entries…`);
-    await syncAllBooks();
+    setSetupStatus(`Created “${config.spreadsheetName}” for ${activeBook().name}.`);
     announce('New Google Sheet created and connected.');
+    if (syncAfter) await syncAllBooks();
   } catch (error) { setSetupStatus(error.message || 'Could not create the Google Sheet.', true); }
   finally { elements.createNewSheet.disabled = false; elements.chooseGoogleSheet.disabled = false; await refreshView(); }
 }
@@ -1222,7 +1308,7 @@ async function cleanupOldRightSummary(config) {
 
 async function syncBookToSheet(book) {
   const config = await bookConfig(book);
-  if (!config.spreadsheetId) return;
+  if (!config.spreadsheetId) throw new Error('This book has no Google Sheet assigned.');
   const indexes = await ensureResponseHeader(config);
   try { await styleHeaderRow(config, indexes); } catch {}
   await cleanupOldRightSummary(config);
@@ -1244,11 +1330,21 @@ async function syncAllBooks() {
   if (!tokenIsValid()) { setSyncStatus('Waiting to sync', 'Tap “Sync now” to sign in and send your entries.', 'pending'); return; }
   isSyncing = true;
   elements.syncNow.disabled = true;
+
+  const allRecs = await getAllTransactions();
   const targets = [];
+  const skipped = [];
   const seen = new Set();
   for (const b of [activeBook(), ...books]) {
-    if (b && b.spreadsheetId && !seen.has(b.id)) { seen.add(b.id); targets.push(b); }
+    if (!b || seen.has(b.id)) continue;
+    seen.add(b.id);
+    if (b.spreadsheetId) targets.push(b);
+    else {
+      const pendingCount = allRecs.filter((r) => r.bookId === b.id && r.syncState === 'pending').length;
+      if (pendingCount > 0) skipped.push({ name: b.name, count: pendingCount });
+    }
   }
+
   const total = targets.length;
   let i = 0;
   const errors = [];
@@ -1260,10 +1356,15 @@ async function syncAllBooks() {
       catch (error) { errors.push({ name: book.name, message: error.message || 'unknown error' }); }
     }
     lastSyncFinishedAt = Date.now();
+
     if (errors.length) {
       const msg = errors.map((e) => `“${e.name}”: ${e.message}`).join('; ');
       setSyncStatus('Sync needs attention', msg, 'error');
       setSetupStatus(`Sync problems: ${msg}`, true);
+    } else if (skipped.length) {
+      const msg = skipped.map((s) => `“${s.name}” has ${s.count} waiting ${s.count === 1 ? 'entry' : 'entries'} but no Sheet`).join('; ');
+      setSyncStatus('Some books need a Sheet', msg + '. Open Settings → Books to create one.', 'pending');
+      setSetupStatus(msg + '. Open Settings → Books to create one.', true);
     } else if (total === 0) {
       setSyncStatus('Saved on this device', 'No book has a Google Sheet connected yet.', 'ready');
     } else {
@@ -1279,15 +1380,42 @@ async function syncAllBooks() {
 
 async function oneTapSync() {
   if (!cryptoKey) return;
-  if (!books.some((b) => b.spreadsheetId)) {
+  if (!navigator.onLine) { announce('You are offline. Your entries are safe on this device.'); return; }
+
+  const allRecs = await getAllTransactions();
+  const booksWithPendingNoSheet = [];
+  for (const b of books) {
+    if (!b.spreadsheetId) {
+      const c = allRecs.filter((r) => r.bookId === b.id && r.syncState === 'pending').length;
+      if (c > 0) booksWithPendingNoSheet.push({ book: b, count: c });
+    }
+  }
+
+  if (!books.some((b) => b.spreadsheetId) && !booksWithPendingNoSheet.length) {
     updateOnboarding();
     elements.onboardingCard?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     announce('Create or choose a Sheet for this book first.');
     return;
   }
-  if (!navigator.onLine) { announce('You are offline. Your entries are safe on this device.'); return; }
+
   try { await ensureSignedIn(); }
   catch (error) { setSyncStatus('Sign-in needed', error.message || 'Google sign-in was not completed.', 'error'); return; }
+
+  const originalBookId = currentBookId;
+  for (const { book, count } of booksWithPendingNoSheet) {
+    const ok = window.confirm(
+      `Book “${book.name}” has ${count} ${count === 1 ? 'entry' : 'entries'} waiting but no Google Sheet.\n\n` +
+      `Create a Google Sheet for “${book.name}” now?\n\n` +
+      `Yes = create the Sheet (saved in My Drive root; you can move it later in Drive).\n` +
+      `No = skip; the entries stay on this device.`
+    );
+    if (!ok) continue;
+    if (book.id !== currentBookId) await switchBook(book.id);
+    try { await createNewSpreadsheet({ skipConfirm: true, syncAfter: false, askFolder: false }); }
+    catch (e) { /* reported via setupStatus */ }
+  }
+  if (currentBookId !== originalBookId) await switchBook(originalBookId);
+
   await syncAllBooks();
 }
 
@@ -1484,7 +1612,7 @@ function bindBookEvents() {
     try {
       await createBook(name);
       await refreshView();
-      announce(`Created “${activeBook().name}”. Name its Google Sheet when you’re online.`);
+      announce(`Created “${activeBook().name}”. Tap “Create a new Sheet” in Settings → Books to back it up.`);
     } catch (error) { announce(error.message || 'Could not create the book.'); }
   });
 }
