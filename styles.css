@@ -1,97 +1,23 @@
-@font-face {
-  font-family: 'DM Sans';
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url('./fonts/dm-sans-400.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'DM Sans';
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url('./fonts/dm-sans-500.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'DM Sans';
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: url('./fonts/dm-sans-600.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'DM Sans';
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url('./fonts/dm-sans-700.woff2') format('woff2');
-}
-
-@font-face {
-  font-family: 'Manrope';
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url('./fonts/manrope-400.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'Manrope';
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url('./fonts/manrope-500.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'Manrope';
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: url('./fonts/manrope-600.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'Manrope';
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url('./fonts/manrope-700.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'Manrope';
-  font-style: normal;
-  font-weight: 800;
-  font-display: swap;
-  src: url('./fonts/manrope-800.woff2') format('woff2');
-}
+@font-face { font-family: 'DM Sans'; font-style: normal; font-weight: 400; font-display: swap; src: url('./fonts/dm-sans-400.woff2') format('woff2'); }
+@font-face { font-family: 'DM Sans'; font-style: normal; font-weight: 500; font-display: swap; src: url('./fonts/dm-sans-500.woff2') format('woff2'); }
+@font-face { font-family: 'DM Sans'; font-style: normal; font-weight: 600; font-display: swap; src: url('./fonts/dm-sans-600.woff2') format('woff2'); }
+@font-face { font-family: 'DM Sans'; font-style: normal; font-weight: 700; font-display: swap; src: url('./fonts/dm-sans-700.woff2') format('woff2'); }
+@font-face { font-family: 'Manrope'; font-style: normal; font-weight: 400; font-display: swap; src: url('./fonts/manrope-400.woff2') format('woff2'); }
+@font-face { font-family: 'Manrope'; font-style: normal; font-weight: 500; font-display: swap; src: url('./fonts/manrope-500.woff2') format('woff2'); }
+@font-face { font-family: 'Manrope'; font-style: normal; font-weight: 600; font-display: swap; src: url('./fonts/manrope-600.woff2') format('woff2'); }
+@font-face { font-family: 'Manrope'; font-style: normal; font-weight: 700; font-display: swap; src: url('./fonts/manrope-700.woff2') format('woff2'); }
+@font-face { font-family: 'Manrope'; font-style: normal; font-weight: 800; font-display: swap; src: url('./fonts/manrope-800.woff2') format('woff2'); }
 
 :root {
   color-scheme: light;
-  --paper: #f5f2ec;
-  --surface: #fffefa;
-  --ink: #202b27;
-  --muted: #7d8680;
-  --line: #e8e6de;
-  --green: #1f6b50;
-  --green-dark: #16533d;
-  --green-soft: #e8f2ec;
-  --red: #ba5a48;
-  --red-soft: #f8ece8;
-  --gold: #dab76d;
+  --paper: #f5f2ec; --surface: #fffefa; --ink: #202b27; --muted: #7d8680; --line: #e8e6de;
+  --green: #1f6b50; --green-dark: #16533d; --green-soft: #e8f2ec; --red: #ba5a48; --red-soft: #f8ece8; --gold: #dab76d;
   --shadow: 0 12px 38px rgba(45, 54, 46, .06);
   font-family: 'DM Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-synthesis: none;
 }
-
 * { box-sizing: border-box; }
-
-body {
-  min-width: 320px;
-  margin: 0;
-  background:
-    radial-gradient(circle at 12% 3%, rgba(218, 183, 109, .12), transparent 27rem),
-    var(--paper);
-  color: var(--ink);
-}
-
+body { min-width: 320px; margin: 0; background: radial-gradient(circle at 12% 3%, rgba(218, 183, 109, .12), transparent 27rem), var(--paper); color: var(--ink); }
 button, input, textarea { font: inherit; }
 button { cursor: pointer; }
 
@@ -105,9 +31,7 @@ h1, h2, strong { font-family: 'Manrope', 'DM Sans', sans-serif; }
 h1 { margin-bottom: 0; font-size: 21px; letter-spacing: -.04em; }
 h2 { margin-bottom: 0; font-size: 19px; letter-spacing: -.035em; }
 
-.icon-button, .secondary-button, .text-button {
-  display: inline-flex; align-items: center; justify-content: center; gap: 9px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); font-weight: 600; transition: transform .15s ease, border-color .15s ease, background .15s ease;
-}
+.icon-button, .secondary-button, .text-button { display: inline-flex; align-items: center; justify-content: center; gap: 9px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); font-weight: 600; transition: transform .15s ease, border-color .15s ease, background .15s ease; }
 .icon-button { min-height: 42px; padding: 0 14px; font-size: 13px; }
 .icon-button span:first-child { color: var(--green); font-size: 17px; }
 .icon-button:hover, .secondary-button:hover, .text-button:hover { transform: translateY(-1px); border-color: #c9d6cd; }
@@ -221,7 +145,6 @@ h2 { margin-bottom: 0; font-size: 19px; letter-spacing: -.035em; }
   .summary-grid { gap: 10px; }
   .summary-card { min-height: 112px; padding: 16px; }
 }
-
 @media (max-width: 540px) {
   .app-shell { width: calc(100% - 26px); padding-top: 15px; padding-bottom: 20px; }
   .topbar { margin-bottom: 17px; }
@@ -250,10 +173,7 @@ h2 { margin-bottom: 0; font-size: 19px; letter-spacing: -.035em; }
   .archive-reset-box { align-items: stretch; flex-direction: column; }
   .app-footer { flex-direction: column; gap: 5px; }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
-}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; } }
 
 /* First-run card */
 .onboarding-card { margin-bottom: 18px; padding: 22px; border: 1px solid #cfe2d6; border-radius: 17px; background: linear-gradient(180deg, #f4faf6 0%, var(--surface) 100%); box-shadow: var(--shadow); }
@@ -276,3 +196,21 @@ h2 { margin-bottom: 0; font-size: 19px; letter-spacing: -.035em; }
   .onboarding-currency { width: 100%; }
   .onboarding-actions .primary-button { width: 100%; }
 }
+
+/* ===== Books switcher (added) ===== */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); border: 0; }
+.book-bar { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
+.book-switcher { flex: 1; min-width: 0; }
+.book-switcher select { width: 100%; min-height: 38px; padding: 0 10px; border: 1px solid #e5e4dc; border-radius: 10px; background: #fff; color: var(--ink); font-family: 'Manrope', sans-serif; font-size: 12px; font-weight: 600; }
+.book-switcher select:focus { border-color: #8ab49b; outline: none; box-shadow: 0 0 0 3px rgba(72, 143, 102, .1); }
+.book-bar .text-button { flex: 0 0 auto; }
+@media (max-width: 540px) {
+  .book-bar { padding: 8px 10px; gap: 8px; }
+  .book-bar .text-button { font-size: 10px; padding: 0 9px; }
+}
+
+/* ===== Books management (Settings) ===== */
+.books-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.books-list-row { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid #e5e4dc; border-radius: 9px; background: #fff; }
+.books-list-name { flex: 1; font-size: 12px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.books-list-row .text-button { min-height: 30px; padding: 0 9px; font-size: 10px; }

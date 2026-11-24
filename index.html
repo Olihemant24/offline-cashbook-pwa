@@ -9,31 +9,22 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" href="./icon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="./styles.css">
-    
-    <!-- Google Search Console Verification -->
     <meta name="google-site-verification" content="b9B2DFIeArlooXYNg6mH7-ykUVhXZ34MrTVwFiSRGmM" />
-    
     <title>My Cashbook - Offline Personal Finance</title>
   </head>
   <body>
-    
-    <!-- LOCK SCREEN OVERLAY -->
     <div id="lockScreen" style="position: fixed; inset: 0; z-index: 9999; background: #f5f2ec; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; text-align: center;">
       <div class="brand-mark" aria-hidden="true" style="margin-bottom: 20px; width: 60px; height: 60px; font-size: 28px; border-radius: 18px;">¤</div>
       <h2 style="margin-bottom: 10px; font-family: 'Manrope', sans-serif; color: #202b27;">Welcome to My Cashbook</h2>
       <p id="lockMessage" style="color: #7d8680; font-size: 14px; max-width: 320px; margin-bottom: 24px; line-height: 1.5;">Unlock your cashbook to continue.</p>
-      
       <form id="unlockForm" style="display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 300px;">
         <input id="unlockPassword" type="password" placeholder="Master Password" autocomplete="current-password" style="width: 100%; height: 48px; padding: 0 16px; border: 1px solid #e5e4dc; border-radius: 12px; font-size: 16px; text-align: center; background: #fff;">
         <button type="submit" class="primary-button" id="unlockBtn" style="width: 100%; height: 48px; font-size: 14px; margin-top: 8px;">Unlock Cashbook</button>
       </form>
-      
       <button id="biometricBtn" type="button" style="display: none; margin-top: 16px; padding: 12px 24px; background: #fff; border: 1px solid #e5e4dc; border-radius: 12px; font-size: 14px; font-weight: 600; cursor: pointer; align-items: center; gap: 8px; color: #202b27;">
         <span style="font-size: 20px;">👤</span> Unlock with Face ID / Touch ID
       </button>
-
       <button id="forgotPasswordBtn" type="button" style="display: none; margin-top: 16px; padding: 6px 10px; background: transparent; border: 0; color: #1f6b50; font-size: 12px; font-weight: 600; cursor: pointer;">Forgot password?</button>
-
       <p id="lockError" style="color: #ba5a48; font-size: 12px; margin-top: 12px; min-height: 18px; font-weight: 600;"></p>
     </div>
 
@@ -50,6 +41,14 @@
           <span aria-hidden="true">⚙</span><span class="button-label">Settings</span>
         </button>
       </header>
+
+      <section class="book-bar" aria-label="Cashbooks">
+        <label class="book-switcher">
+          <span class="sr-only">Cashbook</span>
+          <select id="bookSelect"></select>
+        </label>
+        <button class="text-button" id="newBookBtn" type="button">＋ New book</button>
+      </section>
 
       <section class="sync-strip" aria-live="polite">
         <span class="online-dot" id="onlineDot" aria-hidden="true"></span>
@@ -86,17 +85,17 @@
       <section class="summary-grid" aria-label="Cashbook totals">
         <article class="summary-card balance-card">
           <span class="card-label">Available balance</span>
-            <strong class="balance-value" id="balanceTotal">0</strong>
+          <strong class="balance-value" id="balanceTotal">0</strong>
           <span class="card-note" id="balanceNote">Starting balance plus money in minus money out</span>
         </article>
         <article class="summary-card">
           <span class="card-label">Money came in</span>
-            <strong class="income-value" id="incomeTotal">0</strong>
+          <strong class="income-value" id="incomeTotal">0</strong>
           <span class="card-note">All saved transactions</span>
         </article>
         <article class="summary-card">
           <span class="card-label">Money went out</span>
-            <strong class="expense-value" id="expenseTotal">0</strong>
+          <strong class="expense-value" id="expenseTotal">0</strong>
           <span class="card-note">All saved transactions</span>
         </article>
       </section>
@@ -104,28 +103,15 @@
       <section class="content-grid">
         <section class="panel entry-panel" aria-labelledby="entryHeading">
           <div class="panel-heading">
-            <div>
-              <p class="eyebrow">NEW ENTRY</p>
-              <h2 id="entryHeading">Record a transaction</h2>
-            </div>
+            <div><p class="eyebrow">NEW ENTRY</p><h2 id="entryHeading">Record a transaction</h2></div>
             <span class="local-badge"><span aria-hidden="true">●</span> Saves on this device</span>
           </div>
-
           <form id="transactionForm" autocomplete="off">
             <div class="amount-fields">
-              <label class="field amount-field income-field">
-                <span>Money Came In <small id="currencyLabelIn">(NPR)</small></span>
-                <span class="input-wrap"><input id="moneyIn" name="moneyIn" inputmode="decimal" type="number" min="0" step="0.01" placeholder="0"></span>
-              </label>
-              <label class="field amount-field expense-field">
-                <span>Money Went Out <small id="currencyLabelOut">(NPR)</small></span>
-                <span class="input-wrap"><input id="moneyOut" name="moneyOut" inputmode="decimal" type="number" min="0" step="0.01" placeholder="0"></span>
-              </label>
+              <label class="field amount-field income-field"><span>Money Came In <small id="currencyLabelIn">(NPR)</small></span><span class="input-wrap"><input id="moneyIn" name="moneyIn" inputmode="decimal" type="number" min="0" step="0.01" placeholder="0"></span></label>
+              <label class="field amount-field expense-field"><span>Money Went Out <small id="currencyLabelOut">(NPR)</small></span><span class="input-wrap"><input id="moneyOut" name="moneyOut" inputmode="decimal" type="number" min="0" step="0.01" placeholder="0"></span></label>
             </div>
-            <label class="field">
-              <span>Remarks <small>Optional</small></span>
-              <textarea id="remarks" name="remarks" rows="3" maxlength="500" placeholder="What was this transaction for?"></textarea>
-            </label>
+            <label class="field"><span>Remarks <small>Optional</small></span><textarea id="remarks" name="remarks" rows="3" maxlength="500" placeholder="What was this transaction for?"></textarea></label>
             <div class="save-row">
               <p class="saved-time-hint"><span aria-hidden="true">◷</span> Date and time are saved automatically</p>
               <button class="primary-button" type="submit">Save transaction <span aria-hidden="true">↗</span></button>
@@ -136,18 +122,11 @@
 
         <section class="panel history-panel" aria-labelledby="historyHeading">
           <div class="panel-heading history-heading">
-            <div>
-              <p class="eyebrow">YOUR RECORDS</p>
-              <h2 id="historyHeading">Recent transactions</h2>
-            </div>
+            <div><p class="eyebrow">YOUR RECORDS</p><h2 id="historyHeading">Recent transactions</h2></div>
             <span class="record-count" id="recordCount">0 records</span>
           </div>
           <div class="transaction-list" id="transactionList" aria-live="polite">
-            <div class="empty-state">
-              <span class="empty-icon" aria-hidden="true">＋</span>
-              <strong>No transactions yet</strong>
-              <span>Your saved entries will appear here.</span>
-            </div>
+            <div class="empty-state"><span class="empty-icon" aria-hidden="true">＋</span><strong>No transactions yet</strong><span>Your saved entries will appear here.</span></div>
           </div>
           <p class="history-footnote" id="historyFootnote">This device keeps your recent records available offline.</p>
         </section>
@@ -156,7 +135,7 @@
       <details class="settings-panel" id="archivePanel" open>
         <summary class="settings-summary"><span>Start a new period</span><span class="summary-chevron" aria-hidden="true">⌄</span></summary>
         <div class="settings-content">
-          <p class="settings-intro">Saves a copy of your Sheet, moves your old entries and dashboard snapshot into archive tabs, and starts counting again from zero. Keep the archive tabs: they are your records of past periods. To tidy them away, hide them instead of deleting them. Connect &amp; sync first.</p>
+          <p class="settings-intro">Saves a copy of your Sheet, moves your old entries and dashboard snapshot into archive tabs, and starts counting again from zero for this book. Keep the archive tabs: they are your records of past periods. To tidy them away, hide them instead of deleting them. Connect &amp; sync first.</p>
           <div style="margin: 14px 0; padding: 18px; border: 2px solid rgba(47, 107, 80, 0.55); border-radius: 16px; background: rgba(47, 107, 80, 0.07);">
             <label class="field" for="archiveName" style="display: block;">
               <span style="display: block; font-size: 1.15rem; font-weight: 700; margin-bottom: 6px;">Name this archive</span>
@@ -168,9 +147,7 @@
             <input type="checkbox" id="carryBalance">
             <span>Keep my current balance as the starting balance</span>
           </label>
-          <div class="settings-actions">
-            <button class="secondary-button" id="archiveNow" type="button">Archive &amp; start fresh</button>
-          </div>
+          <div class="settings-actions"><button class="secondary-button" id="archiveNow" type="button">Archive &amp; start fresh</button></div>
           <p class="setup-status" id="archiveStatus" role="status" aria-live="polite"></p>
         </div>
       </details>
@@ -185,23 +162,14 @@
               <input id="currencyCode" type="text" maxlength="3" autocapitalize="characters" autocomplete="off" value="NPR" placeholder="NPR, USD, EUR, INR">
               <small class="currency-note">Choose before your first entry; keep one currency per cashbook.</small>
             </label>
-            <label class="field">
-              <span>Your Google Sheet</span>
-              <input id="spreadsheetInput" type="text" readonly placeholder="Not connected yet">
-            </label>
+            <label class="field"><span>Your Google Sheet</span><input id="spreadsheetInput" type="text" readonly placeholder="Not connected yet"></label>
           </div>
-          
+
           <div style="margin: 16px 0; padding: 16px; background: #f9f9f7; border: 1px solid #e5e4dc; border-radius: 12px;">
             <h3 style="margin: 0 0 6px 0; font-size: 14px; color: #202b27;">Security &amp; Locking</h3>
             <p id="securityStatus" class="dev-intro" style="margin: 0 0 12px 0;">Checking…</p>
-            <label style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px; cursor: pointer;">
-              <input type="checkbox" id="biometricToggle">
-              <span>Unlock with Face ID / Touch ID / fingerprint</span>
-            </label>
-            <label class="field" style="margin: 12px 0; max-width: 360px;">
-              <span>Master password <small>optional · min 10 characters</small></span>
-              <input id="passwordInput" type="password" autocomplete="new-password" placeholder="Set or change your password" style="height: 42px; padding: 0 11px; font-size: 11px; font-weight: 500;">
-            </label>
+            <label style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px; cursor: pointer;"><input type="checkbox" id="biometricToggle"><span>Unlock with Face ID / Touch ID / fingerprint</span></label>
+            <label class="field" style="margin: 12px 0; max-width: 360px;"><span>Master password <small>optional · min 10 characters</small></span><input id="passwordInput" type="password" autocomplete="new-password" placeholder="Set or change your password" style="height: 42px; padding: 0 11px; font-size: 11px; font-weight: 500;"></label>
             <div class="settings-actions" style="margin: 10px 0; justify-content: flex-start;">
               <button class="secondary-button" id="setPasswordBtn" type="button">Set / change password</button>
               <button class="secondary-button" id="removePasswordBtn" type="button">Remove password</button>
@@ -213,27 +181,12 @@
             <summary>Advanced: Google Cloud project (developers only)</summary>
             <p class="dev-intro">Most people never need this. The app ships with shared defaults. To use your own Google Cloud project, paste its OAuth client ID, API key, and project number, then Save and reconnect.</p>
             <div class="settings-fields" style="margin-top: 10px;">
-              <label class="field">
-                <span>Google OAuth client ID</span>
-                <input id="clientId" type="text" inputmode="url" autocomplete="off" placeholder="Default master client ID is active">
-              </label>
-              <label class="field">
-                <span>Google API key</span>
-                <input id="apiKey" type="text" inputmode="url" autocomplete="off" placeholder="Default master API key is active">
-              </label>
-              <label class="field">
-                <span>Google Cloud project number</span>
-                <input id="appId" type="text" inputmode="numeric" autocomplete="off" placeholder="Default master project number is active">
-              </label>
+              <label class="field"><span>Google OAuth client ID</span><input id="clientId" type="text" inputmode="url" autocomplete="off" placeholder="Default master client ID is active"></label>
+              <label class="field"><span>Google API key</span><input id="apiKey" type="text" inputmode="url" autocomplete="off" placeholder="Default master API key is active"></label>
+              <label class="field"><span>Google Cloud project number</span><input id="appId" type="text" inputmode="numeric" autocomplete="off" placeholder="Default master project number is active"></label>
               <div class="settings-fields-two">
-                <label class="field">
-                  <span>Form response tab</span>
-                  <input id="responseTab" type="text" value="Form responses 1" autocomplete="off">
-                </label>
-                <label class="field">
-                  <span>Dashboard tab</span>
-                  <input id="dashboardTab" type="text" value="Dashboard" autocomplete="off">
-                </label>
+                <label class="field"><span>Form response tab</span><input id="responseTab" type="text" value="Form responses 1" autocomplete="off"></label>
+                <label class="field"><span>Dashboard tab</span><input id="dashboardTab" type="text" value="Dashboard" autocomplete="off"></label>
               </div>
             </div>
             <button class="secondary-button" id="resetGoogleCreds" type="button" style="margin-top: 10px;">Reset to app defaults</button>
@@ -246,6 +199,11 @@
             <button class="secondary-button" id="createNewSheet" type="button">Create a new Sheet</button>
             <button class="primary-button" id="connectGoogle" type="button">Sign in &amp; sync</button>
             <button class="secondary-button" id="signOutGoogle" type="button">Sign out</button>
+          </div>
+          <div style="margin: 14px 0; padding: 14px 16px; background: #f9f9f7; border: 1px solid #e5e4dc; border-radius: 12px;">
+            <h3 style="margin: 0 0 6px 0; font-size: 14px; color: #202b27;">Books</h3>
+            <p class="dev-intro" style="margin: 0 0 10px 0;">Rename or remove a book. Removing a book erases its entries from this device, but its Google Sheet is left untouched.</p>
+            <div id="booksList" class="books-list"></div>
           </div>
           <div style="margin: 14px 0; padding: 14px 16px; background: #f9f9f7; border: 1px solid #e5e4dc; border-radius: 12px;">
             <h3 style="margin: 0 0 6px 0; font-size: 14px; color: #202b27;">Google account</h3>
