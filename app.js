@@ -9,7 +9,7 @@ const PERIODS_TAB = 'Cashbook Periods';
 const DEFAULT_CLIENT_ID = '1017685550464-um4md5jhrbki0gbna4d7b0osmliuddqm.apps.googleusercontent.com';
 const DEFAULT_API_KEY = 'AIzaSyCBYJek40PIcM2Qr8dGJHpYto12SH9qBH8';
 const DEFAULT_APP_ID = '1017685550464';
-const APP_BUILD = 32;
+const APP_BUILD = 33;
 
 let dbPromise;
 let accessToken = null;
@@ -19,13 +19,12 @@ let masterKeyRaw = null;
 let unreadableCount = 0;
 let idleTimeout = null;
 
-// ===== BOOKS STATE =====
 const BOOKS_KEY = 'books';
 const CURRENT_BOOK_KEY = 'currentBookId';
 let books = [];
 let currentBookId = null;
 
-// ===== CRYPTO HELPERS =====
+// ===== CRYPTO =====
 function bytesToB64(bytes) { return btoa(String.fromCharCode(...new Uint8Array(bytes))); }
 function b64ToBytes(base64) { return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)); }
 function randomSaltB64() { return bytesToB64(crypto.getRandomValues(new Uint8Array(16))); }
@@ -44,22 +43,20 @@ async function derivePasswordKek(password, saltBase64) {
 async function encryptText(text, key = cryptoKey) {
   if (!key) throw new Error("App is locked.");
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(text));
-  return { iv: bytesToB64(iv), data: bytesToB64(new Uint8Array(ciphertext)) };
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(text));
+  return { iv: bytesToB64(iv), data: bytesToB64(new Uint8Array(ct)) };
 }
 async function decryptText(encObj, key = cryptoKey) {
   if (!key) throw new Error("App is locked.");
   if (!encObj || !encObj.iv || !encObj.data) return null;
-  try {
-    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64ToBytes(encObj.iv) }, key, b64ToBytes(encObj.data));
-    return new TextDecoder().decode(decrypted);
-  } catch (e) { console.error("Decryption failed", e); return null; }
+  try { return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64ToBytes(encObj.iv) }, key, b64ToBytes(encObj.data))); }
+  catch (e) { console.error("Decryption failed", e); return null; }
 }
 async function wrapMasterKeyWith(kek) {
   if (!masterKeyRaw) throw new Error('Unlock the cashbook first.');
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, kek, masterKeyRaw);
-  return { iv: bytesToB64(iv), data: bytesToB64(new Uint8Array(cipher)) };
+  const c = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, kek, masterKeyRaw);
+  return { iv: bytesToB64(iv), data: bytesToB64(new Uint8Array(c)) };
 }
 async function unwrapMasterKey(wrapped, kek) {
   const raw = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64ToBytes(wrapped.iv) }, kek, b64ToBytes(wrapped.data));
@@ -67,13 +64,12 @@ async function unwrapMasterKey(wrapped, kek) {
   return cryptoKey;
 }
 
-// ===== WEBAUTHN PRF =====
+// ===== WEBAUTHN =====
 async function createPrfCredential(saltBytes) {
   const challenge = crypto.getRandomValues(new Uint8Array(32));
   const credential = await navigator.credentials.create({
     publicKey: {
-      challenge,
-      rp: { name: 'My Cashbook' },
+      challenge, rp: { name: 'My Cashbook' },
       user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'cashbook-user', displayName: 'Cashbook User' },
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
       authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred' },
@@ -89,9 +85,7 @@ async function createPrfCredential(saltBytes) {
 }
 async function getPrfBytes(credIdBytes, saltBytes) {
   const challenge = crypto.getRandomValues(new Uint8Array(32));
-  const assertion = await navigator.credentials.get({
-    publicKey: { challenge, allowCredentials: [{ id: credIdBytes, type: 'public-key' }], userVerification: 'required', extensions: { prf: { eval: { first: saltBytes } } } }
-  });
+  const assertion = await navigator.credentials.get({ publicKey: { challenge, allowCredentials: [{ id: credIdBytes, type: 'public-key' }], userVerification: 'required', extensions: { prf: { eval: { first: saltBytes } } } } });
   const output = assertion.getClientExtensionResults?.()?.prf?.results?.first;
   if (!output) throw new Error('Biometric key is not available on this device.');
   return new Uint8Array(output);
@@ -131,11 +125,7 @@ function disableBiometrics() {
   localStorage.removeItem('cb_prf_key_wrapped');
   if (!localStorage.getItem('cb_key_wrapped') && masterKeyRaw) localStorage.setItem('cb_key_raw', bytesToB64(masterKeyRaw));
 }
-
-// ===== SECURITY STATE =====
-function securityState() {
-  return { hasPassword: Boolean(localStorage.getItem('cb_key_wrapped')), hasBiometrics: Boolean(localStorage.getItem('cb_prf_key_wrapped')), hasRaw: Boolean(localStorage.getItem('cb_key_raw')) };
-}
+function securityState() { return { hasPassword: Boolean(localStorage.getItem('cb_key_wrapped')), hasBiometrics: Boolean(localStorage.getItem('cb_prf_key_wrapped')), hasRaw: Boolean(localStorage.getItem('cb_key_raw')) }; }
 function isProtected() { const s = securityState(); return s.hasPassword || s.hasBiometrics; }
 function updateSecurityUi() {
   if (!elements.securityStatus) return;
@@ -154,9 +144,9 @@ function saveToken(token, expiresIn) {
 }
 function loadSavedToken() {
   try {
-    const token = sessionStorage.getItem('cb_token');
-    const expires = Number(sessionStorage.getItem('cb_token_expires') || '0');
-    if (token && expires > Date.now() + 60000) { accessToken = token; tokenExpiresAt = expires; return true; }
+    const t = sessionStorage.getItem('cb_token');
+    const e = Number(sessionStorage.getItem('cb_token_expires') || '0');
+    if (t && e > Date.now() + 60000) { accessToken = t; tokenExpiresAt = e; return true; }
   } catch {}
   return false;
 }
@@ -198,38 +188,32 @@ const elements = {
 function openDatabase() {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
-      const db = request.result;
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
       if (!db.objectStoreNames.contains(STORE_TRANSACTIONS)) db.createObjectStore(STORE_TRANSACTIONS, { keyPath: 'id' });
       if (!db.objectStoreNames.contains(STORE_SETTINGS)) db.createObjectStore(STORE_SETTINGS, { keyPath: 'key' });
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error('Could not open local storage.'));
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error('Could not open local storage.'));
   });
   return dbPromise;
 }
-function transactionDone(tx) {
-  return new Promise((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onabort = tx.onerror = () => reject(tx.error || new Error('Could not save local data.')); });
-}
+function transactionDone(tx) { return new Promise((res, rej) => { tx.oncomplete = () => res(); tx.onabort = tx.onerror = () => rej(tx.error || new Error('Could not save local data.')); }); }
 async function getAllTransactions() {
   const db = await openDatabase();
   const tx = db.transaction(STORE_TRANSACTIONS, 'readonly');
   const done = transactionDone(tx);
-  const result = await new Promise((resolve, reject) => {
-    const req = tx.objectStore(STORE_TRANSACTIONS).getAll();
-    req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => reject(req.error);
-  });
+  const result = await new Promise((res, rej) => { const r = tx.objectStore(STORE_TRANSACTIONS).getAll(); r.onsuccess = () => res(r.result || []); r.onerror = () => rej(r.error); });
   await done;
   unreadableCount = 0;
   const out = [];
-  for (const record of result) {
-    if (record.encrypted) {
-      const plain = await decryptText(record.encrypted);
-      if (plain) { try { out.push({ id: record.id, ...JSON.parse(plain) }); } catch { unreadableCount++; } }
+  for (const rec of result) {
+    if (rec.encrypted) {
+      const p = await decryptText(rec.encrypted);
+      if (p) { try { out.push({ id: rec.id, ...JSON.parse(p) }); } catch { unreadableCount++; } }
       else unreadableCount++;
-    } else { out.push(record); await putTransaction(record); }
+    } else { out.push(rec); await putTransaction(rec); }
   }
   return out;
 }
@@ -246,14 +230,10 @@ async function getSetting(key, fallback = null) {
   const db = await openDatabase();
   const tx = db.transaction(STORE_SETTINGS, 'readonly');
   const done = transactionDone(tx);
-  const result = await new Promise((resolve, reject) => {
-    const req = tx.objectStore(STORE_SETTINGS).get(key);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
+  const result = await new Promise((res, rej) => { const r = tx.objectStore(STORE_SETTINGS).get(key); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
   await done;
   if (!result) return fallback;
-  if (result.encrypted) { const plain = await decryptText(result.encrypted); return plain ? JSON.parse(plain) : fallback; }
+  if (result.encrypted) { const p = await decryptText(result.encrypted); return p ? JSON.parse(p) : fallback; }
   return result.value !== undefined ? result.value : fallback;
 }
 async function saveSetting(key, value) {
@@ -265,25 +245,22 @@ async function saveSetting(key, value) {
   await done;
 }
 
-// ===== BOOK HELPERS =====
+// ===== BOOKS =====
 function newBookId() { if (crypto.randomUUID) return crypto.randomUUID(); return `book-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`; }
-
 async function loadBooks() {
   books = await getSetting(BOOKS_KEY, null);
   if (!Array.isArray(books) || !books.length) {
-    const legacyConfig = await getSetting('googleConfig', {});
+    const legacy = await getSetting('googleConfig', {});
     const first = {
       id: newBookId(), name: 'Personal',
-      spreadsheetId: legacyConfig.spreadsheetId || '', spreadsheetName: legacyConfig.spreadsheetName || '',
-      responseTab: legacyConfig.responseTab || 'Form responses 1', dashboardTab: legacyConfig.dashboardTab || 'Dashboard'
+      spreadsheetId: legacy.spreadsheetId || '', spreadsheetName: legacy.spreadsheetName || '',
+      responseTab: legacy.responseTab || 'Form responses 1', dashboardTab: legacy.dashboardTab || 'Dashboard'
     };
     books = [first];
     await saveSetting(BOOKS_KEY, books);
     await saveSetting(CURRENT_BOOK_KEY, first.id);
-    const legacyPeriod = await getSetting('periodStartIso', null);
-    if (legacyPeriod) await saveSetting(`periodStart:${first.id}`, legacyPeriod);
-    const legacyBalance = await getSetting('startingBalanceMinor', null);
-    if (legacyBalance !== null) await saveSetting(`startingBalance:${first.id}`, legacyBalance);
+    const p = await getSetting('periodStartIso', null); if (p) await saveSetting(`periodStart:${first.id}`, p);
+    const b = await getSetting('startingBalanceMinor', null); if (b !== null) await saveSetting(`startingBalance:${first.id}`, b);
     const all = await getAllTransactions();
     for (const rec of all) { if (!rec.bookId) await putTransaction({ ...rec, bookId: first.id }); }
   }
@@ -291,12 +268,7 @@ async function loadBooks() {
   if (!books.some((b) => b.id === currentBookId)) currentBookId = books[0].id;
 }
 async function saveBooks() { await saveSetting(BOOKS_KEY, books); }
-async function updateActiveBookConfig(patch) {
-  const book = activeBook(); if (!book) return;
-  Object.assign(book, patch);
-  await saveBooks();
-  cachedConfig = await bookConfig(book);
-}
+async function updateActiveBookConfig(patch) { const b = activeBook(); if (!b) return; Object.assign(b, patch); await saveBooks(); cachedConfig = await bookConfig(b); }
 async function bookConfig(book) {
   if (!book) return {};
   const saved = await getSetting('googleConfig', {});
@@ -313,8 +285,7 @@ async function bookConfig(book) {
   };
 }
 async function switchBook(bookId) {
-  if (!books.some((b) => b.id === bookId)) return;
-  if (bookId === currentBookId) return;
+  if (!books.some((b) => b.id === bookId) || bookId === currentBookId) return;
   currentBookId = bookId;
   await saveSetting(CURRENT_BOOK_KEY, bookId);
   cachedConfig = await bookConfig(activeBook());
@@ -326,10 +297,7 @@ async function createBook(name) {
   if (!trimmed) throw new Error('Enter a name for the new book.');
   if (books.some((b) => b.name.toLowerCase() === trimmed.toLowerCase())) throw new Error(`A book called “${trimmed}” already exists.`);
   const book = { id: newBookId(), name: trimmed, spreadsheetId: '', spreadsheetName: '', responseTab: trimmed, dashboardTab: 'Dashboard' };
-  books.push(book);
-  await saveBooks();
-  await switchBook(book.id);
-  return book;
+  books.push(book); await saveBooks(); await switchBook(book.id); return book;
 }
 async function deleteBook(book) {
   if (books.length <= 1) throw new Error('You need at least one book.');
@@ -354,108 +322,65 @@ async function renameBook(book, newName) {
   const trimmed = String(newName || '').trim();
   if (!trimmed) throw new Error('Enter a name.');
   if (books.some((b) => b.id !== book.id && b.name.toLowerCase() === trimmed.toLowerCase())) throw new Error(`A book called “${trimmed}” already exists.`);
-  book.name = trimmed;
-  await saveBooks();
+  book.name = trimmed; await saveBooks();
 }
 async function getBookTransactions(bookId = currentBookId) { const all = await getAllTransactions(); return all.filter((r) => r.bookId === bookId); }
 async function getActiveBookRecords() {
   const records = await getBookTransactions(currentBookId);
   const start = Date.parse(await getSetting(`periodStart:${currentBookId}`, '') || '');
   if (Number.isNaN(start)) return records;
-  return records.filter((record) => {
-    if (record.syncState === 'pending') return true;
-    const time = Date.parse(record.createdAt || record.sheetTimestamp || '');
-    return !Number.isNaN(time) && time >= start;
+  return records.filter((r) => {
+    if (r.syncState === 'pending') return true;
+    const t = Date.parse(r.createdAt || r.sheetTimestamp || '');
+    return !Number.isNaN(t) && t >= start;
   });
 }
 
 // ===== BOOK UI =====
 function renderBookSwitcher() {
-  const select = elements.bookSelect;
-  if (!select) return;
+  const select = elements.bookSelect; if (!select) return;
   const existingIds = Array.from(select.options).map((o) => o.value);
   const wantedIds = books.map((b) => b.id);
   const idsMatch = existingIds.length === wantedIds.length && existingIds.every((id, i) => id === wantedIds[i]);
-  const namesChanged = books.some((b, i) => {
-    const opt = select.options[i];
-    if (!opt) return true;
-    const expected = b.spreadsheetId ? `${b.name} ✓` : b.name;
-    return opt.textContent !== expected;
-  });
+  const namesChanged = books.some((b, i) => { const opt = select.options[i]; if (!opt) return true; return opt.textContent !== (b.spreadsheetId ? `${b.name} ✓` : b.name); });
   if (idsMatch && !namesChanged) { select.value = currentBookId; return; }
   const hadFocus = document.activeElement === select;
   select.replaceChildren();
-  for (const book of books) {
-    const opt = document.createElement('option');
-    opt.value = book.id;
-    opt.textContent = book.spreadsheetId ? `${book.name} ✓` : book.name;
-    if (book.id === currentBookId) opt.selected = true;
-    select.append(opt);
+  for (const b of books) {
+    const opt = document.createElement('option'); opt.value = b.id; opt.textContent = b.spreadsheetId ? `${b.name} ✓` : b.name;
+    if (b.id === currentBookId) opt.selected = true; select.append(opt);
   }
   if (hadFocus) select.focus();
 }
 function renderBooksList() {
-  const list = elements.booksList;
-  if (!list) return;
+  const list = elements.booksList; if (!list) return;
   list.replaceChildren();
   for (const book of books) {
-    const row = document.createElement('div');
-    row.className = 'books-list-row';
-    const name = document.createElement('span');
-    name.className = 'books-list-name';
+    const row = document.createElement('div'); row.className = 'books-list-row';
+    const name = document.createElement('span'); name.className = 'books-list-name';
     name.textContent = book.name + (book.spreadsheetId ? ' ✓' : '');
     name.title = book.spreadsheetId ? (book.spreadsheetName || book.spreadsheetId) : 'No Google Sheet yet';
     row.append(name);
     if (!book.spreadsheetId) {
-      const create = document.createElement('button');
-      create.type = 'button';
-      create.className = 'text-button';
-      create.textContent = 'Create Sheet';
-      create.onclick = async () => {
-        try {
-          if (book.id !== currentBookId) await switchBook(book.id);
-          await createNewSpreadsheet();
-        } catch (e) { /* reported via setupStatus */ }
-      };
+      const create = document.createElement('button'); create.type = 'button'; create.className = 'text-button'; create.textContent = 'Create Sheet';
+      create.onclick = async () => { try { if (book.id !== currentBookId) await switchBook(book.id); await createNewSpreadsheet(); } catch (e) {} };
       row.append(create);
     }
-    const rename = document.createElement('button');
-    rename.type = 'button';
-    rename.className = 'text-button';
-    rename.textContent = 'Rename';
+    const rename = document.createElement('button'); rename.type = 'button'; rename.className = 'text-button'; rename.textContent = 'Rename';
     rename.onclick = async () => {
       const newName = window.prompt('Rename this book:', book.name);
       if (newName === null) return;
-      try {
-        await renameBook(book, newName);
-        renderBookSwitcher();
-        renderBooksList();
-        await refreshView();
-        announce(`Renamed to “${book.name}”.`);
-      } catch (error) { alert(error.message || 'Could not rename the book.'); }
+      try { await renameBook(book, newName); renderBookSwitcher(); renderBooksList(); await refreshView(); announce(`Renamed to “${book.name}”.`); }
+      catch (e) { alert(e.message || 'Could not rename the book.'); }
     };
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.className = 'text-button';
-    del.textContent = 'Delete';
-    del.disabled = books.length <= 1;
+    const del = document.createElement('button'); del.type = 'button'; del.className = 'text-button'; del.textContent = 'Delete'; del.disabled = books.length <= 1;
     del.onclick = async () => {
       if (books.length <= 1) return;
-      const txCount = (await getBookTransactions(book.id)).length;
-      const ok = window.confirm(
-        `Delete the book “${book.name}”?\n\n` +
-        `• ${txCount} ${txCount === 1 ? 'entry' : 'entries'} will be erased from this device.\n` +
-        (book.spreadsheetId ? `• Its Google Sheet (${book.spreadsheetName || book.spreadsheetId}) is NOT deleted.\n` : '') +
-        `\nThis cannot be undone. Continue?`
-      );
+      const c = (await getBookTransactions(book.id)).length;
+      const ok = window.confirm(`Delete the book “${book.name}”?\n\n• ${c} ${c === 1 ? 'entry' : 'entries'} erased from this device.\n` + (book.spreadsheetId ? `• Its Google Sheet (${book.spreadsheetName || book.spreadsheetId}) is NOT deleted.\n` : '') + `\nThis cannot be undone. Continue?`);
       if (!ok) return;
-      try {
-        await deleteBook(book);
-        renderBookSwitcher();
-        renderBooksList();
-        await refreshView();
-        announce(`Deleted “${book.name}”.`);
-      } catch (error) { alert(error.message || 'Could not delete the book.'); }
+      try { await deleteBook(book); renderBookSwitcher(); renderBooksList(); await refreshView(); announce(`Deleted “${book.name}”.`); }
+      catch (e) { alert(e.message || 'Could not delete the book.'); }
     };
     row.append(rename, del);
     list.append(row);
@@ -467,20 +392,17 @@ function currencyFractionDigits(code = activeCurrencyCode) { return new Intl.Num
 function currencyScale(code = activeCurrencyCode) { return 10 ** currencyFractionDigits(code); }
 function configureCurrency(currencyCode) {
   const normalized = String(currencyCode || DEFAULT_CURRENCY).trim().toUpperCase();
-  const fractionDigits = currencyFractionDigits(normalized);
+  const fd = currencyFractionDigits(normalized);
   activeCurrencyCode = normalized;
-  const amountStep = 1 / (10 ** fractionDigits);
-  elements.moneyIn.step = String(amountStep); elements.moneyOut.step = String(amountStep);
-  const placeholder = fractionDigits ? `0.${'0'.repeat(fractionDigits)}` : '0';
-  elements.moneyIn.placeholder = placeholder; elements.moneyOut.placeholder = placeholder;
-  currencyFormatters.set(normalized, new Intl.NumberFormat(undefined, { style: 'currency', currency: normalized, minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits }));
+  const step = 1 / (10 ** fd);
+  elements.moneyIn.step = String(step); elements.moneyOut.step = String(step);
+  const ph = fd ? `0.${'0'.repeat(fd)}` : '0';
+  elements.moneyIn.placeholder = ph; elements.moneyOut.placeholder = ph;
+  currencyFormatters.set(normalized, new Intl.NumberFormat(undefined, { style: 'currency', currency: normalized, minimumFractionDigits: fd, maximumFractionDigits: fd }));
   $('currencyLabelIn').textContent = `(${normalized})`; $('currencyLabelOut').textContent = `(${normalized})`;
   return normalized;
 }
-function moneyToMinorUnits(value, code = activeCurrencyCode) {
-  const n = Number(value);
-  return Number.isFinite(n) && n >= 0 ? Math.round(n * currencyScale(code)) : 0;
-}
+function moneyToMinorUnits(value, code = activeCurrencyCode) { const n = Number(value); return Number.isFinite(n) && n >= 0 ? Math.round(n * currencyScale(code)) : 0; }
 function parseMoney(value, code = activeCurrencyCode) {
   if (typeof value === 'number') return Number.isFinite(value) ? Math.round(value * currencyScale(code)) : 0;
   const n = Number(String(value ?? '').replace(/,/g, '').replace(/[^\d.-]/g, ''));
@@ -488,44 +410,25 @@ function parseMoney(value, code = activeCurrencyCode) {
 }
 function formatMoney(minorUnits, code = activeCurrencyCode) {
   let fmt = currencyFormatters.get(code);
-  if (!fmt) {
-    const fd = currencyFractionDigits(code);
-    fmt = new Intl.NumberFormat(undefined, { style: 'currency', currency: code, minimumFractionDigits: fd, maximumFractionDigits: fd });
-    currencyFormatters.set(code, fmt);
-  }
+  if (!fmt) { const fd = currencyFractionDigits(code); fmt = new Intl.NumberFormat(undefined, { style: 'currency', currency: code, minimumFractionDigits: fd, maximumFractionDigits: fd }); currencyFormatters.set(code, fmt); }
   return fmt.format((Number(minorUnits) || 0) / currencyScale(code));
 }
 function localTimeLabel(record) {
-  if (record.createdAt) {
-    const d = new Date(record.createdAt);
-    if (!Number.isNaN(d.getTime())) return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(d);
-  }
+  if (record.createdAt) { const d = new Date(record.createdAt); if (!Number.isNaN(d.getTime())) return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(d); }
   return record.sheetTimestamp || 'Date saved in Google Sheets';
 }
-function announce(message) {
-  elements.toast.textContent = message;
-  elements.toast.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => elements.toast.classList.remove('show'), 3000);
-}
+function announce(message) { elements.toast.textContent = message; elements.toast.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => elements.toast.classList.remove('show'), 3000); }
 function setFeedback(msg, isError = false) { elements.formFeedback.textContent = msg; elements.formFeedback.classList.toggle('error', isError); }
-function setSetupStatus(msg, isError = false) {
-  elements.setupStatus.textContent = msg; elements.setupStatus.classList.toggle('error', isError);
-  if (elements.onboardingStatus) { elements.onboardingStatus.textContent = msg; elements.onboardingStatus.classList.toggle('error', isError); }
-}
+function setSetupStatus(msg, isError = false) { elements.setupStatus.textContent = msg; elements.setupStatus.classList.toggle('error', isError); if (elements.onboardingStatus) { elements.onboardingStatus.textContent = msg; elements.onboardingStatus.classList.toggle('error', isError); } }
 function updateOnboarding() {
   const connected = Boolean(activeBook()?.spreadsheetId);
   if (elements.onboardingCard) elements.onboardingCard.hidden = connected;
   if (elements.archivePanel) elements.archivePanel.hidden = !connected;
-  if (elements.openSheetLink) {
-    elements.openSheetLink.hidden = !connected;
-    if (connected) elements.openSheetLink.href = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(activeBook().spreadsheetId)}/edit`;
-  }
+  if (elements.openSheetLink) { elements.openSheetLink.hidden = !connected; if (connected) elements.openSheetLink.href = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(activeBook().spreadsheetId)}/edit`; }
 }
 function setArchiveStatus(msg, isError = false) { if (!elements.archiveStatus) return; elements.archiveStatus.textContent = msg; elements.archiveStatus.classList.toggle('error', isError); }
 function setSyncStatus(title, message, mode = 'ready') {
-  elements.syncTitle.textContent = title;
-  elements.syncMessage.textContent = message;
+  elements.syncTitle.textContent = title; elements.syncMessage.textContent = message;
   elements.onlineDot.classList.toggle('offline', !navigator.onLine || mode === 'offline');
   elements.syncNow.hidden = mode !== 'pending' && mode !== 'error';
 }
@@ -553,9 +456,8 @@ async function createTransaction(event) {
     } else {
       setSyncStatus('Saved offline', 'This entry is queued on this device for when you are online.', 'offline');
     }
-  } catch (error) {
-    setFeedback(error.message || 'Could not save this entry on the device.', true);
-  } finally { if (submitBtn) submitBtn.disabled = false; }
+  } catch (error) { setFeedback(error.message || 'Could not save this entry on the device.', true); }
+  finally { if (submitBtn) submitBtn.disabled = false; }
 }
 
 function sortedRecords(records) {
@@ -571,8 +473,7 @@ function renderTransactions(records) {
   elements.recordCount.textContent = `${records.length} ${records.length === 1 ? 'record' : 'records'}`;
   elements.transactionList.replaceChildren();
   if (!visible.length) {
-    const empty = document.createElement('div');
-    empty.className = 'empty-state';
+    const empty = document.createElement('div'); empty.className = 'empty-state';
     empty.innerHTML = '<span class="empty-icon" aria-hidden="true">＋</span><strong>No transactions yet</strong><span>Your saved entries will appear here.</span>';
     elements.transactionList.append(empty);
     return;
@@ -581,8 +482,7 @@ function renderTransactions(records) {
     const inMinor = Number(record.moneyInMinor) || 0;
     const outMinor = Number(record.moneyOutMinor) || 0;
     const kind = inMinor && outMinor ? 'mixed' : inMinor ? 'income' : 'expense';
-    const row = document.createElement('article');
-    row.className = 'transaction-row';
+    const row = document.createElement('article'); row.className = 'transaction-row';
     const main = document.createElement('div'); main.className = 'transaction-main';
     const icon = document.createElement('span'); icon.className = `transaction-icon ${kind}`; icon.setAttribute('aria-hidden', 'true');
     icon.textContent = kind === 'income' ? '↙' : kind === 'expense' ? '↗' : '↔';
@@ -604,14 +504,12 @@ async function refreshView() {
   activeCurrencyCode = await getSetting('currencyCode', DEFAULT_CURRENCY) || DEFAULT_CURRENCY;
   const income = records.reduce((s, x) => s + (Number(x.moneyInMinor) || 0), 0);
   const expense = records.reduce((s, x) => s + (Number(x.moneyOutMinor) || 0), 0);
-  const startingBalance = Number(await getSetting(`startingBalance:${currentBookId}`, 0)) || 0;
+  const sb = Number(await getSetting(`startingBalance:${currentBookId}`, 0)) || 0;
   elements.incomeTotal.textContent = formatMoney(income);
   elements.expenseTotal.textContent = formatMoney(expense);
-  elements.balanceTotal.textContent = formatMoney(startingBalance + income - expense);
-  elements.balanceNote.textContent = startingBalance ? `Includes your ${formatMoney(startingBalance)} starting balance` : 'Starting balance plus money in minus money out';
-  renderTransactions(records);
-  renderBookSwitcher();
-  renderBooksList();
+  elements.balanceTotal.textContent = formatMoney(sb + income - expense);
+  elements.balanceNote.textContent = sb ? `Includes your ${formatMoney(sb)} starting balance` : 'Starting balance plus money in minus money out';
+  renderTransactions(records); renderBookSwitcher(); renderBooksList();
   if (elements.historyFootnote) {
     elements.historyFootnote.textContent = unreadableCount
       ? `${unreadableCount} saved ${unreadableCount === 1 ? 'entry' : 'entries'} could not be read on this device.`
@@ -623,7 +521,7 @@ async function refreshView() {
   if (!navigator.onLine) {
     setSyncStatus(pending ? 'Saved offline' : 'You are offline', pending ? `${pending} ${pending === 1 ? 'entry is' : 'entries are'} waiting on this device.` : 'Your saved cashbook is available on this device.', 'offline');
   } else if (pending) {
-    setSyncStatus('Waiting to sync', `${pending} ${pending === 1 ? 'entry is' : 'entries are'} saved here. ${hasSheet ? 'Tap “Sync now” to send them to your Sheet.' : 'Connect a Google Sheet to back them up.'}`, 'pending');
+    setSyncStatus('Waiting to sync', `${pending} ${pending === 1 ? 'entry is' : 'entries are'} saved here. ${hasSheet ? 'Tap “Sync now” to send them to your Sheet.' : 'Tap “Create a new Sheet” in Settings.'}`, 'pending');
   } else if (!hasSheet) {
     setSyncStatus('Saved on this device', `“${activeBook()?.name || 'This book'}” has no Sheet yet. Tap “Create a new Sheet” in Settings.`, 'pending');
   } else if (!tokenIsValid()) {
@@ -634,11 +532,7 @@ async function refreshView() {
 }
 
 // ===== GOOGLE =====
-function spreadsheetIdFrom(value) {
-  const raw = String(value || '').trim();
-  const m = raw.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-  return m ? m[1] : raw;
-}
+function spreadsheetIdFrom(value) { const m = String(value || '').trim().match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/); return m ? m[1] : String(value || '').trim(); }
 async function loadConfigFromForm() {
   const saved = await getSetting('googleConfig', {});
   const book = activeBook();
@@ -683,31 +577,21 @@ async function saveConfig() {
   } catch (error) { setSetupStatus(error.message || 'Could not save settings.', true); }
 }
 async function persistCurrencyCode(currencyCode) {
-  let normalized;
-  try { normalized = configureCurrency(currencyCode); }
-  catch { throw new Error('Enter a three-letter ISO 4217 currency code supported by this browser, such as NPR, USD, EUR, or INR.'); }
+  let n;
+  try { n = configureCurrency(currencyCode); } catch { throw new Error('Enter a three-letter ISO 4217 currency code supported by this browser, such as NPR, USD, EUR, or INR.'); }
   const current = await getSetting('currencyCode', DEFAULT_CURRENCY) || DEFAULT_CURRENCY;
   const records = await getAllTransactions();
-  if (records.length && normalized !== current) {
-    configureCurrency(current); elements.currencyCode.value = current;
-    throw new Error(`This cashbook already has records in ${current}. Use a new device or clear records to start in ${normalized}.`);
-  }
-  await saveSetting('currencyCode', normalized);
-  return normalized;
+  if (records.length && n !== current) { configureCurrency(current); elements.currencyCode.value = current; throw new Error(`This cashbook already has records in ${current}. Use a new device or clear records to start in ${n}.`); }
+  await saveSetting('currencyCode', n);
+  return n;
 }
 function loadGoogleIdentity() {
   if (window.google?.accounts?.oauth2) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector('script[data-google-identity]');
-    if (existing) {
-      existing.addEventListener('load', resolve, { once: true });
-      existing.addEventListener('error', () => reject(new Error('Could not load Google sign-in. Check your internet connection.')), { once: true });
-      return;
-    }
-    const s = document.createElement('script');
-    s.src = 'https://accounts.google.com/gsi/client'; s.async = true; s.defer = true; s.dataset.googleIdentity = 'true';
-    s.onload = resolve; s.onerror = () => reject(new Error('Could not load Google sign-in. Check your internet connection.'));
-    document.head.append(s);
+  return new Promise((res, rej) => {
+    const ex = document.querySelector('script[data-google-identity]');
+    if (ex) { ex.addEventListener('load', res, { once: true }); ex.addEventListener('error', () => rej(new Error('Could not load Google sign-in. Check your internet connection.')), { once: true }); return; }
+    const s = document.createElement('script'); s.src = 'https://accounts.google.com/gsi/client'; s.async = true; s.defer = true; s.dataset.googleIdentity = 'true';
+    s.onload = res; s.onerror = () => rej(new Error('Could not load Google sign-in. Check your internet connection.')); document.head.append(s);
   });
 }
 async function connectGoogle() {
@@ -715,8 +599,7 @@ async function connectGoogle() {
   if (!config.clientId || !config.apiKey || !config.appId) { setSetupStatus('Google credentials missing. Please check settings.', true); elements.settingsPanel.open = true; return; }
   if (!config.spreadsheetId) { setSetupStatus('Choose your Google Sheet first, or tap “Create New Sheet”.', true); elements.settingsPanel.open = true; return; }
   if (!navigator.onLine) { setSetupStatus('Connect Google while online. Your offline entries are safe on this device.', true); return; }
-  try { await persistCurrencyCode(config.currencyCode); }
-  catch (error) { setSetupStatus(error.message || 'Check the currency code.', true); return; }
+  try { await persistCurrencyCode(config.currencyCode); } catch (error) { setSetupStatus(error.message || 'Check the currency code.', true); return; }
   const saved = await getSetting('googleConfig', {});
   await saveSetting('googleConfig', { ...saved, clientId: config.clientId, apiKey: config.apiKey, appId: config.appId, currencyCode: config.currencyCode });
   await updateActiveBookConfig({ responseTab: config.responseTab, dashboardTab: config.dashboardTab });
@@ -727,37 +610,34 @@ async function connectGoogle() {
   finally { elements.connectGoogle.disabled = false; await refreshView(); }
 }
 function requestGoogleToken(config, promptMode = '') {
-  let wantsChooser = false;
-  try { wantsChooser = localStorage.getItem(CHOOSE_ACCOUNT_KEY) === '1'; } catch {}
+  let wantsChooser = false; try { wantsChooser = localStorage.getItem(CHOOSE_ACCOUNT_KEY) === '1'; } catch {}
   const prompt = wantsChooser ? 'select_account' : promptMode;
-  return loadGoogleIdentity().then(() => new Promise((resolve, reject) => {
+  return loadGoogleIdentity().then(() => new Promise((res, rej) => {
     const client = window.google.accounts.oauth2.initTokenClient({
       client_id: config.clientId, scope: DRIVE_FILE_SCOPE,
       callback: (response) => {
-        if (response.error || !response.access_token) { reject(new Error(response.error_description || response.error || 'Google access was not granted.')); return; }
+        if (response.error || !response.access_token) { rej(new Error(response.error_description || response.error || 'Google access was not granted.')); return; }
         saveToken(response.access_token, response.expires_in);
         try { localStorage.removeItem(CHOOSE_ACCOUNT_KEY); } catch {}
-        resolve(response.access_token);
+        res(response.access_token);
       },
-      error_callback: (error) => reject(new Error(error.message || 'Google permission was closed.'))
+      error_callback: (error) => rej(new Error(error.message || 'Google permission was closed.'))
     });
     client.requestAccessToken({ prompt });
   }));
 }
 function loadGooglePicker() {
-  return new Promise((resolve, reject) => {
-    const finish = () => { if (!window.gapi?.load) { reject(new Error('Google Picker could not start.')); return; } window.gapi.load('picker', { callback: resolve }); };
+  return new Promise((res, rej) => {
+    const finish = () => { if (!window.gapi?.load) { rej(new Error('Google Picker could not start.')); return; } window.gapi.load('picker', { callback: res }); };
     if (window.gapi?.load) return finish();
-    const existing = document.querySelector('script[data-google-picker]');
-    if (existing) { existing.addEventListener('load', finish, { once: true }); existing.addEventListener('error', () => reject(new Error('Could not load Google Picker.')), { once: true }); return; }
-    const s = document.createElement('script');
-    s.src = 'https://apis.google.com/js/api.js'; s.async = true; s.defer = true; s.dataset.googlePicker = 'true';
-    s.onload = finish; s.onerror = () => reject(new Error('Could not load Google Picker. Check your internet connection.'));
-    document.head.append(s);
+    const ex = document.querySelector('script[data-google-picker]');
+    if (ex) { ex.addEventListener('load', finish, { once: true }); ex.addEventListener('error', () => rej(new Error('Could not load Google Picker.')), { once: true }); return; }
+    const s = document.createElement('script'); s.src = 'https://apis.google.com/js/api.js'; s.async = true; s.defer = true; s.dataset.googlePicker = 'true';
+    s.onload = finish; s.onerror = () => rej(new Error('Could not load Google Picker. Check your internet connection.')); document.head.append(s);
   });
 }
 function showGoogleSheetPicker(config, token) {
-  return loadGooglePicker().then(() => new Promise((resolve, reject) => {
+  return loadGooglePicker().then(() => new Promise((res, rej) => {
     try {
       const view = new window.google.picker.DocsView(window.google.picker.ViewId.SPREADSHEETS);
       view.setIncludeFolders(true); view.setSelectFolderEnabled(false);
@@ -765,56 +645,49 @@ function showGoogleSheetPicker(config, token) {
         .setAppId(config.appId).setDeveloperKey(config.apiKey).setOAuthToken(token)
         .setOrigin(window.location.origin).setTitle('Choose a Sheet for this book').addView(view)
         .setCallback((data) => {
-          if (data.action === window.google.picker.Action.PICKED) resolve(data.docs?.[0] || null);
-          if (data.action === window.google.picker.Action.CANCEL) resolve(null);
-        })
-        .build();
+          if (data.action === window.google.picker.Action.PICKED) res(data.docs?.[0] || null);
+          if (data.action === window.google.picker.Action.CANCEL) res(null);
+        }).build();
       picker.setVisible(true);
-    } catch (error) { reject(error); }
+    } catch (e) { rej(e); }
   }));
 }
 function showFolderPicker(config, token) {
-  return loadGooglePicker().then(() => new Promise((resolve, reject) => {
+  return loadGooglePicker().then(() => new Promise((res, rej) => {
     try {
       const view = new window.google.picker.DocsView(window.google.picker.ViewId.FOLDERS);
-      view.setSelectFolderEnabled(true);
-      view.setIncludeFolders(true);
+      view.setSelectFolderEnabled(true); view.setIncludeFolders(true);
       const picker = new window.google.picker.PickerBuilder()
         .setAppId(config.appId).setDeveloperKey(config.apiKey).setOAuthToken(token)
-        .setOrigin(window.location.origin).setTitle('Choose a folder for this book').addView(view)
+        .setOrigin(window.location.origin).setTitle('Choose a folder for this Sheet').addView(view)
         .setCallback((data) => {
-          if (data.action === window.google.picker.Action.PICKED) resolve(data.docs?.[0]?.id || null);
-          if (data.action === window.google.picker.Action.CANCEL) resolve(null);
-        })
-        .build();
+          if (data.action === window.google.picker.Action.PICKED) res(data.docs?.[0]?.id || null);
+          if (data.action === window.google.picker.Action.CANCEL) res(null);
+        }).build();
       picker.setVisible(true);
-    } catch (error) { reject(error); }
+    } catch (e) { rej(e); }
   }));
 }
 async function chooseGoogleSheet() {
-  if (!navigator.onLine) { setSetupStatus('Choose a Google Sheet while online. Offline entries will remain saved here.', true); return; }
-  try { await ensureSignedIn(); }
-  catch (error) { setSetupStatus(error.message || 'Google sign-in was not completed.', true); return; }
+  if (!navigator.onLine) { setSetupStatus('Choose a Google Sheet while online.', true); return; }
+  try { await ensureSignedIn(); } catch (e) { setSetupStatus(e.message || 'Google sign-in was not completed.', true); return; }
   const config = await loadConfigFromForm();
   if (!config.clientId || !config.apiKey || !config.appId) { setSetupStatus('Google credentials missing. Please check settings.', true); elements.settingsPanel.open = true; return; }
-  try { await persistCurrencyCode(config.currencyCode); }
-  catch (error) { setSetupStatus(error.message || 'Check the currency code.', true); return; }
+  try { await persistCurrencyCode(config.currencyCode); } catch (e) { setSetupStatus(e.message || 'Check the currency code.', true); return; }
   elements.chooseGoogleSheet.disabled = true;
   setSetupStatus('Opening Google Sheets picker…');
   try {
     const saved = await getSetting('googleConfig', {});
     await saveSetting('googleConfig', { ...saved, clientId: config.clientId, apiKey: config.apiKey, appId: config.appId, currencyCode: config.currencyCode });
     const selected = await showGoogleSheetPicker(config, accessToken);
-    if (!selected) { setSetupStatus('No Sheet selected. Tap “Create New Sheet” to make a fresh cashbook Sheet.'); return; }
+    if (!selected) { setSetupStatus('No Sheet selected.'); return; }
     config.spreadsheetId = selected.id;
     config.spreadsheetName = selected.name || 'Selected Sheet';
     try {
       const tabs = await readSheetTabs({ ...config, spreadsheetId: config.spreadsheetId });
       const titles = tabs.map((t) => t.title);
-      const responseTab = titles.find((t) => /form responses/i.test(t)) || titles.find((t) => !/dashboard/i.test(t) && t !== PERIODS_TAB) || 'Form responses 1';
-      const dashboardTab = titles.find((t) => /dashboard/i.test(t)) || 'Dashboard';
-      config.responseTab = responseTab;
-      config.dashboardTab = dashboardTab;
+      config.responseTab = titles.find((t) => /form responses/i.test(t)) || titles.find((t) => !/dashboard/i.test(t) && t !== PERIODS_TAB) || 'Form responses 1';
+      config.dashboardTab = titles.find((t) => /dashboard/i.test(t)) || 'Dashboard';
     } catch {}
     elements.spreadsheetInput.dataset.spreadsheetId = config.spreadsheetId;
     elements.spreadsheetInput.dataset.spreadsheetName = config.spreadsheetName;
@@ -822,9 +695,9 @@ async function chooseGoogleSheet() {
     if (elements.responseTab) elements.responseTab.value = config.responseTab;
     if (elements.dashboardTab) elements.dashboardTab.value = config.dashboardTab;
     await updateActiveBookConfig({ spreadsheetId: config.spreadsheetId, spreadsheetName: config.spreadsheetName, responseTab: config.responseTab, dashboardTab: config.dashboardTab });
-    setSetupStatus(`Selected “${config.spreadsheetName}” for ${activeBook().name}. Syncing…`);
+    setSetupStatus(`Selected “${config.spreadsheetName}” for ${activeBook().name}. Loading history…`);
     await syncAllBooks();
-  } catch (error) { clearSavedToken(); setSetupStatus(error.message || 'Could not select the Google Sheet.', true); }
+  } catch (e) { clearSavedToken(); setSetupStatus(e.message || 'Could not select the Google Sheet.', true); }
   finally { elements.chooseGoogleSheet.disabled = false; }
 }
 
@@ -838,32 +711,27 @@ async function createDriveFolder(name) {
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) { if (res.status === 401) clearSavedToken(); throw new Error(body.error?.message || `Could not create folder (${res.status}).`); }
+  if (!body.id) throw new Error('Folder created but Google did not return an ID.');
   return body.id;
 }
 async function moveFileToFolder(fileId, folderId) {
-  if (!accessToken || !folderId) return;
+  if (!accessToken || !folderId) return false;
   try {
-    await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?addParents=${encodeURIComponent(folderId)}&removeParents=root&fields=id,parents`, {
-      method: 'PATCH',
-      headers: { Authorization: `Bearer ${accessToken}` }
-    });
-  } catch {}
-}
-async function askWhereToSave(config) {
-  if (!window.confirm('Save this Sheet in a folder?\n\nYes = choose or create a folder.\nNo = save in My Drive (root).')) return null;
-  const choice = window.prompt(
-    `Folder for this Sheet:\n\n` +
-    `• Type a NEW folder name to create it and save inside.\n` +
-    `• Type “pick” to choose an existing folder.\n` +
-    `• Leave empty to save in My Drive (root).`,
-    activeBook()?.name || ''
-  );
-  if (!choice) return null;
-  if (choice.toLowerCase() === 'pick') {
-    try { return await showFolderPicker(config, accessToken); } catch { return null; }
-  }
-  try { return await createDriveFolder(choice); }
-  catch (error) { setSetupStatus(error.message || 'Could not create the folder.', true); return null; }
+    let res = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?addParents=${encodeURIComponent(folderId)}&removeParents=root&fields=id,parents`,
+      { method: 'PATCH', headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (res.ok) return true;
+    // Fallback: try only addParents (may leave file visible in both locations)
+    res = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?addParents=${encodeURIComponent(folderId)}&fields=id,parents`,
+      { method: 'PATCH', headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (res.ok) return true;
+    const body = await res.json().catch(() => ({}));
+    console.warn('Move to folder failed:', res.status, body);
+    return false;
+  } catch (e) { console.warn('Move to folder error:', e); return false; }
 }
 
 // ===== DASHBOARD / SHEET CREATION =====
@@ -909,75 +777,140 @@ async function styleNewSheet(config, created) {
   ]);
 }
 
+// Simplified: one prompt, sheet created FIRST, folder best-effort AFTER.
 async function createNewSpreadsheet(options = {}) {
-  const { syncAfter = true, skipConfirm = false, askFolder = true } = options;
-  if (!navigator.onLine) { setSetupStatus('You are offline. Creating a Sheet needs the internet. Your saved entries stay on this device.', true); return; }
-  try { await ensureSignedIn(); }
-  catch (error) { setSetupStatus(error.message || 'Google sign-in was not completed.', true); return; }
+  const { syncAfter = false, askFolder = true } = options;
+  if (!navigator.onLine) { setSetupStatus('You are offline. Creating a Sheet needs the internet.', true); return; }
+  try { await ensureSignedIn(); } catch (e) { setSetupStatus(e.message || 'Google sign-in was not completed.', true); return; }
   const config = await loadConfigFromForm();
   if (!config.clientId || !config.apiKey || !config.appId) { setSetupStatus('Google credentials missing. Please check settings.', true); elements.settingsPanel.open = true; return; }
-  try { await persistCurrencyCode(config.currencyCode); }
-  catch (error) { setSetupStatus(error.message || 'Check the currency code.', true); return; }
+  try { await persistCurrencyCode(config.currencyCode); } catch (e) { setSetupStatus(e.message || 'Check the currency code.', true); return; }
 
-  if (!skipConfirm) {
-    const existing = await getActiveBookRecords();
-    if (existing.length) {
-      const proceed = window.confirm('Create a brand new Google Sheet for this book?\n\n• A new spreadsheet is created in your Google Drive.\n• The Sheet is set up with the right headers and a Dashboard tab.\n• Entries already saved on this device stay here; only unsynced entries are uploaded to the new Sheet.\n\nContinue?');
-      if (!proceed) { setSetupStatus('Cancelled. Nothing was created.'); return; }
+  const book = activeBook();
+  const bookName = book.name;
+
+  // Single prompt. Sheet is created FIRST regardless of what happens below.
+  let folderName = '';
+  let pickedFolderId = null;
+  if (askFolder) {
+    const input = window.prompt(
+      `Create a new Google Sheet for "${bookName}"?\n\n` +
+      `• Type a folder name to create a new folder and save inside.\n` +
+      `• Type "pick" to choose an existing folder.\n` +
+      `• Leave blank to save in My Drive root.`,
+      ''
+    );
+    if (input === null) { setSetupStatus('Cancelled. Nothing was created.'); return; }
+    const trimmed = input.trim();
+    if (trimmed.toLowerCase() === 'pick') {
+      try { pickedFolderId = await showFolderPicker(config, accessToken); }
+      catch { pickedFolderId = null; }
+    } else if (trimmed) {
+      folderName = trimmed;
     }
   }
 
-  let parentFolderId = null;
-  if (askFolder) parentFolderId = await askWhereToSave(config);
+  elements.createNewSheet.disabled = true;
+  elements.chooseGoogleSheet.disabled = true;
+  setSetupStatus('Creating the spreadsheet in your Drive…');
 
-  elements.createNewSheet.disabled = true; elements.chooseGoogleSheet.disabled = true;
-  setSetupStatus('Checking Google access…');
+  let spreadsheetId = null;
   try {
-    const saved = await getSetting('googleConfig', {});
-    await saveSetting('googleConfig', { ...saved, clientId: config.clientId, apiKey: config.apiKey, appId: config.appId, currencyCode: config.currencyCode });
-
-    const book = activeBook();
-    const bookName = book.name;
+    // 1. Create sheet FIRST (critical - guaranteed to happen)
     const title = `My Cashbook — ${bookName}`;
     const responseTab = (config.responseTab && config.responseTab !== 'Form responses 1' && config.responseTab !== 'Form responses')
-      ? config.responseTab
-      : bookName;
+      ? config.responseTab : bookName;
     const dashboardTab = config.dashboardTab || 'Dashboard';
-    config.responseTab = responseTab;
-    config.dashboardTab = dashboardTab;
-    if (elements.responseTab) elements.responseTab.value = responseTab;
-    if (elements.dashboardTab) elements.dashboardTab.value = dashboardTab;
 
-    setSetupStatus('Creating a new spreadsheet in your Drive…');
+    const savedCfg = await getSetting('googleConfig', {});
+    await saveSetting('googleConfig', { ...savedCfg, clientId: config.clientId, apiKey: config.apiKey, appId: config.appId, currencyCode: config.currencyCode });
+
     const res = await fetch('https://sheets.googleapis.com/v4/spreadsheets', {
       method: 'POST',
       headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ properties: { title }, sheets: [{ properties: { title: responseTab } }, { properties: { title: dashboardTab } }] })
+      body: JSON.stringify({
+        properties: { title },
+        sheets: [{ properties: { title: responseTab } }, { properties: { title: dashboardTab } }]
+      })
     });
     const created = await res.json().catch(() => ({}));
     if (!res.ok) { if (res.status === 401) clearSavedToken(); throw new Error(created.error?.message || `Google returned ${res.status}.`); }
-    const spreadsheetId = created.spreadsheetId;
+    spreadsheetId = created.spreadsheetId;
     if (!spreadsheetId) throw new Error('Google did not return the new spreadsheet ID.');
 
-    if (parentFolderId) await moveFileToFolder(spreadsheetId, parentFolderId);
+    // 2. Folder step (best-effort - failure doesn't kill the sheet)
+    let folderNote = '';
+    if (folderName) {
+      setSetupStatus(`Creating folder “${folderName}” and moving the Sheet…`);
+      try {
+        const folderId = await createDriveFolder(folderName);
+        const moved = await moveFileToFolder(spreadsheetId, folderId);
+        if (moved) folderNote = ` (in folder “${folderName}”)`;
+        else folderNote = ` (folder “${folderName}” created, but the Sheet couldn't be moved — find it in My Drive root)`;
+      } catch (e) {
+        folderNote = ` (folder step failed: ${e.message || 'unknown error'} — Sheet is in My Drive root)`;
+      }
+    } else if (pickedFolderId) {
+      setSetupStatus('Moving the Sheet into your chosen folder…');
+      const moved = await moveFileToFolder(spreadsheetId, pickedFolderId);
+      if (!moved) folderNote = ' (could not move into the chosen folder — Sheet is in My Drive root)';
+    }
 
+    // 3. Save to book
     config.spreadsheetId = spreadsheetId;
     config.spreadsheetName = created.properties?.title || title;
-    elements.spreadsheetInput.dataset.spreadsheetId = config.spreadsheetId;
-    elements.spreadsheetInput.dataset.spreadsheetName = config.spreadsheetName;
-    elements.spreadsheetInput.value = `${config.spreadsheetName} · ${config.spreadsheetId}`;
-    await updateActiveBookConfig({ spreadsheetId: config.spreadsheetId, spreadsheetName: config.spreadsheetName, responseTab: config.responseTab, dashboardTab: config.dashboardTab });
-    setSetupStatus('Writing the response headers and dashboard…');
+    config.responseTab = responseTab;
+    config.dashboardTab = dashboardTab;
+    if (elements.spreadsheetInput) {
+      elements.spreadsheetInput.dataset.spreadsheetId = spreadsheetId;
+      elements.spreadsheetInput.dataset.spreadsheetName = config.spreadsheetName;
+      elements.spreadsheetInput.value = `${config.spreadsheetName} · ${spreadsheetId}`;
+    }
+    if (elements.responseTab) elements.responseTab.value = responseTab;
+    if (elements.dashboardTab) elements.dashboardTab.value = dashboardTab;
+    await updateActiveBookConfig({ spreadsheetId, spreadsheetName: config.spreadsheetName, responseTab, dashboardTab });
+
+    // 4. Headers + dashboard (starting balance = 0 for "from 0" feel)
+    setSetupStatus('Setting up headers and dashboard…');
     const headers = ['Timestamp', `Money Came In (${config.currencyCode})`, `Money Went Out (${config.currencyCode})`, 'Remarks'];
-    await sheetsRequest(sheetValuesUrl(spreadsheetId, `${quoteSheetName(config.responseTab)}!A1:D1`, 'valueInputOption=RAW'), { method: 'PUT', body: JSON.stringify({ majorDimension: 'ROWS', values: [headers] }) });
-    const sb = Number(await getSetting(`startingBalance:${currentBookId}`, 0)) || 0;
-    await sheetsRequest(sheetValuesUrl(spreadsheetId, `${quoteSheetName(config.dashboardTab)}!A1:B13`, 'valueInputOption=USER_ENTERED'), { method: 'PUT', body: JSON.stringify({ majorDimension: 'ROWS', values: buildDashboardValues(config, sb / currencyScale(config.currencyCode)) }) });
+    await sheetsRequest(sheetValuesUrl(spreadsheetId, `${quoteSheetName(responseTab)}!A1:D1`, 'valueInputOption=RAW'), {
+      method: 'PUT', body: JSON.stringify({ majorDimension: 'ROWS', values: [headers] })
+    });
+    await sheetsRequest(sheetValuesUrl(spreadsheetId, `${quoteSheetName(dashboardTab)}!A1:B13`, 'valueInputOption=USER_ENTERED'), {
+      method: 'PUT', body: JSON.stringify({ majorDimension: 'ROWS', values: buildDashboardValues(config, 0) })
+    });
     try { await styleNewSheet(config, created); } catch {}
-    setSetupStatus(`Created “${config.spreadsheetName}” for ${activeBook().name}.`);
+
+    // 5. Reset local starting balance so book + sheet agree (fresh start)
+    await saveSetting(`startingBalance:${book.id}`, 0);
+
+    // 6. Optional sync (off by default -> sheet stays at 0 until you tap "Sync now")
+    if (syncAfter) {
+      setSetupStatus('Syncing saved entries…');
+      await syncAllBooks();
+    } else {
+      const pending = (await getBookTransactions(book.id)).filter((r) => r.syncState === 'pending').length;
+      setSetupStatus(
+        `Created “${config.spreadsheetName}”${folderNote}. ` +
+        (pending > 0
+          ? `${pending} ${pending === 1 ? 'entry is' : 'entries are'} waiting on this device — tap “Sync now” to upload them.`
+          : 'Ready for new entries.')
+      );
+    }
     announce('New Google Sheet created and connected.');
-    if (syncAfter) await syncAllBooks();
-  } catch (error) { setSetupStatus(error.message || 'Could not create the Google Sheet.', true); }
-  finally { elements.createNewSheet.disabled = false; elements.chooseGoogleSheet.disabled = false; await refreshView(); }
+  } catch (error) {
+    if (spreadsheetId) {
+      // Sheet was created but setup failed partway - still save it so user can retry
+      try { await updateActiveBookConfig({ spreadsheetId, spreadsheetName: config.spreadsheetName || title, responseTab: config.responseTab, dashboardTab: config.dashboardTab }); } catch {}
+      setSetupStatus(`Sheet created (${spreadsheetId}) but setup failed: ${error.message || 'unknown error'}. You can retry sync from Settings.`, true);
+    } else {
+      setSetupStatus(error.message || 'Could not create the Google Sheet.', true);
+    }
+  } finally {
+    elements.createNewSheet.disabled = false;
+    elements.chooseGoogleSheet.disabled = false;
+    await refreshView();
+  }
 }
 
 // ===== SHEET I/O =====
@@ -994,13 +927,8 @@ function sheetSerialToIso(serial, timeZone) {
   if (!Number.isFinite(wallMs)) return null;
   if (!timeZone) return new Date(wallMs + new Date(wallMs).getTimezoneOffset() * 60000).toISOString();
   const formatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
-  const offsetAt = (utcMs) => {
-    const parts = {};
-    for (const p of formatter.formatToParts(new Date(utcMs))) if (p.type !== 'literal') parts[p.type] = Number(p.value);
-    return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second) - Math.floor(utcMs / 1000) * 1000;
-  };
-  let utcMs = wallMs - offsetAt(wallMs);
-  utcMs = wallMs - offsetAt(utcMs);
+  const offsetAt = (utcMs) => { const parts = {}; for (const p of formatter.formatToParts(new Date(utcMs))) if (p.type !== 'literal') parts[p.type] = Number(p.value); return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second) - Math.floor(utcMs / 1000) * 1000; };
+  let utcMs = wallMs - offsetAt(wallMs); utcMs = wallMs - offsetAt(utcMs);
   return new Date(utcMs).toISOString();
 }
 function columnName(n) { let v = n, r = ''; while (v > 0) { const rem = (v - 1) % 26; r = String.fromCharCode(65 + rem) + r; v = Math.floor((v - 1) / 26); } return r; }
@@ -1012,14 +940,8 @@ async function sheetsRequest(url, options = {}) {
   if (!res.ok) { if (res.status === 401) clearSavedToken(); throw new Error(body.error?.message || `Google Sheets returned ${res.status}.`); }
   return body;
 }
-async function readSpreadsheetTimeZone(config) {
-  const data = await sheetsRequest(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.spreadsheetId)}?fields=properties.timeZone`);
-  return data.properties?.timeZone || undefined;
-}
-function sheetValuesUrl(id, range, query = '') {
-  const base = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}/values/${encodeURIComponent(range)}`;
-  return query ? `${base}?${query}` : base;
-}
+async function readSpreadsheetTimeZone(config) { const d = await sheetsRequest(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.spreadsheetId)}?fields=properties.timeZone`); return d.properties?.timeZone || undefined; }
+function sheetValuesUrl(id, range, query = '') { const base = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}/values/${encodeURIComponent(range)}`; return query ? `${base}?${query}` : base; }
 function findHeaderIndex(headers, pattern) { return headers.findIndex((item) => pattern.test(String(item || '').toLowerCase().replace(/[()]/g, ''))); }
 async function ensureResponseHeader(config) {
   const data = await sheetsRequest(sheetValuesUrl(config.spreadsheetId, `${quoteSheetName(config.responseTab)}!A1:Z1`, 'valueRenderOption=FORMATTED_VALUE'));
@@ -1028,7 +950,7 @@ async function ensureResponseHeader(config) {
   const incomeIndex = findHeaderIndex(headers, /money\s*came\s*in/);
   const expenseIndex = findHeaderIndex(headers, /money\s*went\s*out/);
   const remarksIndex = findHeaderIndex(headers, /remarks?/);
-  if ([timestampIndex, incomeIndex, expenseIndex, remarksIndex].some((i) => i < 0)) throw new Error(`The first row in “${config.responseTab}” must include Timestamp, Money Came In, Money Went Out, and Remarks. The app has not changed the Sheet.`);
+  if ([timestampIndex, incomeIndex, expenseIndex, remarksIndex].some((i) => i < 0)) throw new Error(`The first row in “${config.responseTab}” must include Timestamp, Money Came In, Money Went Out, and Remarks.`);
   for (const i of [incomeIndex, expenseIndex]) {
     const c = String(headers[i] || '').match(/\(([A-Z]{3})\)/i)?.[1]?.toUpperCase();
     if (c && c !== config.currencyCode) throw new Error(`The response tab is labeled ${c}. Set the app to ${c}, or use a Sheet labeled ${config.currencyCode}.`);
@@ -1036,39 +958,34 @@ async function ensureResponseHeader(config) {
   let idIndex = headers.findIndex((item) => String(item || '').trim().toLowerCase() === 'offline entry id');
   if (idIndex < 0) {
     idIndex = Math.max(timestampIndex, incomeIndex, expenseIndex, remarksIndex) + 1;
-    const idColumn = columnName(idIndex + 1);
-    await sheetsRequest(sheetValuesUrl(config.spreadsheetId, `${quoteSheetName(config.responseTab)}!${idColumn}1`, 'valueInputOption=RAW'), { method: 'PUT', body: JSON.stringify({ values: [['Offline Entry ID']] }) });
+    await sheetsRequest(sheetValuesUrl(config.spreadsheetId, `${quoteSheetName(config.responseTab)}!${columnName(idIndex + 1)}1`, 'valueInputOption=RAW'), { method: 'PUT', body: JSON.stringify({ values: [['Offline Entry ID']] }) });
     headers[idIndex] = 'Offline Entry ID';
   }
   return { headers, timestampIndex, incomeIndex, expenseIndex, remarksIndex, idIndex };
 }
-function isSummaryRow(row) {
-  const l = String(row[0] ?? '').trim().toUpperCase();
-  return l.startsWith('TOTAL') || l.startsWith('REMAINING');
-}
+function isSummaryRow(row) { const l = String(row[0] ?? '').trim().toUpperCase(); return l.startsWith('TOTAL') || l.startsWith('REMAINING'); }
 function parseSheetRow(row, rowIndex, indexes, currencyCode, timeZone) {
   const rawId = String(row[indexes.idIndex] || '').trim();
-  const rawTimestamp = row[indexes.timestampIndex];
-  const timestamp = String(rawTimestamp ?? '').trim();
-  if (!timestamp && !row[indexes.incomeIndex] && !row[indexes.expenseIndex] && !row[indexes.remarksIndex]) return null;
-  if (isSummaryRow(row) || timestamp.toUpperCase().startsWith('TOTAL')) return null;
+  const rawT = row[indexes.timestampIndex];
+  const ts = String(rawT ?? '').trim();
+  if (!ts && !row[indexes.incomeIndex] && !row[indexes.expenseIndex] && !row[indexes.remarksIndex]) return null;
+  if (isSummaryRow(row) || ts.toUpperCase().startsWith('TOTAL')) return null;
   const id = rawId || `sheet-row-${rowIndex + 2}`;
   let createdAt = null;
-  if (typeof rawTimestamp === 'number') createdAt = sheetSerialToIso(rawTimestamp, timeZone);
-  else if (timestamp) { const p = Date.parse(timestamp); createdAt = Number.isNaN(p) ? null : new Date(p).toISOString(); }
-  return { id, createdAt, sheetTimestamp: typeof rawTimestamp === 'number' ? '' : timestamp, currencyCode, moneyInMinor: parseMoney(row[indexes.incomeIndex], currencyCode), moneyOutMinor: parseMoney(row[indexes.expenseIndex], currencyCode), remarks: String(row[indexes.remarksIndex] || ''), syncState: rawId ? 'synced' : 'sheet', source: rawId ? 'cashbook' : 'sheet' };
+  if (typeof rawT === 'number') createdAt = sheetSerialToIso(rawT, timeZone);
+  else if (ts) { const p = Date.parse(ts); createdAt = Number.isNaN(p) ? null : new Date(p).toISOString(); }
+  return { id, createdAt, sheetTimestamp: typeof rawT === 'number' ? '' : ts, currencyCode, moneyInMinor: parseMoney(row[indexes.incomeIndex], currencyCode), moneyOutMinor: parseMoney(row[indexes.expenseIndex], currencyCode), remarks: String(row[indexes.remarksIndex] || ''), syncState: rawId ? 'synced' : 'sheet', source: rawId ? 'cashbook' : 'sheet' };
 }
 async function readResponseSheet(config, indexes, timeZone) {
   const lastIndex = Math.max(indexes.timestampIndex, indexes.incomeIndex, indexes.expenseIndex, indexes.remarksIndex, indexes.idIndex);
-  const lastColumn = columnName(lastIndex + 1);
-  const data = await sheetsRequest(sheetValuesUrl(config.spreadsheetId, `${quoteSheetName(config.responseTab)}!A2:${lastColumn}`, 'valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=SERIAL_NUMBER'));
+  const data = await sheetsRequest(sheetValuesUrl(config.spreadsheetId, `${quoteSheetName(config.responseTab)}!A2:${columnName(lastIndex + 1)}`, 'valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=SERIAL_NUMBER'));
   const records = [], summaryRows = [];
   let lastEntryRow = 1;
-  (data.values || []).forEach((row, index) => {
-    const rowNumber = index + 2;
-    if (isSummaryRow(row)) { summaryRows.push(rowNumber); return; }
-    const rec = parseSheetRow(row, index, indexes, config.currencyCode, timeZone);
-    if (rec) { records.push(rec); lastEntryRow = rowNumber; }
+  (data.values || []).forEach((row, i) => {
+    const rn = i + 2;
+    if (isSummaryRow(row)) { summaryRows.push(rn); return; }
+    const rec = parseSheetRow(row, i, indexes, config.currencyCode, timeZone);
+    if (rec) { records.push(rec); lastEntryRow = rn; }
   });
   return { records, lastEntryRow, summaryRows };
 }
@@ -1076,11 +993,7 @@ async function readResponseRows(config, indexes, timeZone) { return (await readR
 
 const TOTALS_COLORS = { dark: { red: 0.1215, green: 0.4196, blue: 0.3137 }, light: { red: 0.9098, green: 0.9490, blue: 0.9254 }, ink: { red: 0.1215, green: 0.4196, blue: 0.3137 }, white: { red: 1, green: 1, blue: 1 } };
 
-async function responseSheetId(config) {
-  const tabs = await readSheetTabs(config);
-  const tab = tabs.find((t) => t.title === config.responseTab);
-  return tab ? tab.sheetId : null;
-}
+async function responseSheetId(config) { const tabs = await readSheetTabs(config); const t = tabs.find((x) => x.title === config.responseTab); return t ? t.sheetId : null; }
 const HEADER_STYLE_VERSION = 1;
 async function styleHeaderRow(config, indexes) {
   const key = `headerStyled:v${HEADER_STYLE_VERSION}:${config.spreadsheetId}`;
@@ -1088,9 +1001,8 @@ async function styleHeaderRow(config, indexes) {
   const sheetId = await responseSheetId(config);
   if (sheetId === null) return;
   const { dark, white } = TOTALS_COLORS;
-  const endColIndex = indexes.remarksIndex + 1;
   await sheetsBatchUpdate(config, [
-    { repeatCell: { range: { sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: endColIndex }, cell: { userEnteredFormat: { backgroundColor: dark, verticalAlignment: 'MIDDLE', horizontalAlignment: 'LEFT', textFormat: { bold: true, fontSize: 10, foregroundColor: white } } }, fields: 'userEnteredFormat(backgroundColor,verticalAlignment,horizontalAlignment,textFormat)' } },
+    { repeatCell: { range: { sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: indexes.remarksIndex + 1 }, cell: { userEnteredFormat: { backgroundColor: dark, verticalAlignment: 'MIDDLE', textFormat: { bold: true, fontSize: 10, foregroundColor: white } } }, fields: 'userEnteredFormat(backgroundColor,verticalAlignment,textFormat)' } },
     { updateDimensionProperties: { range: { sheetId, dimension: 'ROWS', startIndex: 0, endIndex: 1 }, properties: { pixelSize: 30 }, fields: 'pixelSize' } }
   ]);
   await saveSetting(key, true);
@@ -1111,8 +1023,8 @@ async function styleTotalsBlock(config, indexes, totalsRow) {
   if (sheetId === null) return;
   const { dark, light, ink, white } = TOTALS_COLORS;
   const symbol = config.currencyCode === 'NPR' ? 'Rs' : config.currencyCode;
-  const endColIndex = indexes.idIndex + 1;
-  const rowRange = (row, sc = 0, ec = endColIndex) => ({ sheetId, startRowIndex: row - 1, endRowIndex: row, startColumnIndex: sc, endColumnIndex: ec });
+  const endCol = indexes.idIndex + 1;
+  const rowRange = (row, sc = 0, ec = endCol) => ({ sheetId, startRowIndex: row - 1, endRowIndex: row, startColumnIndex: sc, endColumnIndex: ec });
   const remainingRow = totalsRow + 1;
   await sheetsBatchUpdate(config, [
     { repeatCell: { range: rowRange(totalsRow), cell: { userEnteredFormat: { backgroundColor: dark, verticalAlignment: 'MIDDLE', textFormat: { bold: false, fontSize: 10, foregroundColor: white } } }, fields: 'userEnteredFormat(backgroundColor,verticalAlignment,textFormat)' } },
@@ -1122,7 +1034,6 @@ async function styleTotalsBlock(config, indexes, totalsRow) {
     { updateDimensionProperties: { range: { sheetId, dimension: 'ROWS', startIndex: totalsRow - 1, endIndex: remainingRow }, properties: { pixelSize: 28 }, fields: 'pixelSize' } }
   ]);
 }
-
 async function appendPendingForBook(config, indexes, remoteSheet, timeZone, bookId) {
   const remoteIds = new Set(remoteSheet.records.map((r) => r.id));
   const allLocal = await getBookTransactions(bookId);
@@ -1137,7 +1048,7 @@ async function appendPendingForBook(config, indexes, remoteSheet, timeZone, book
   const rowsToUpload = [];
   const recordsToUpdate = [];
   for (const record of pending) {
-    if (record.currencyCode && record.currencyCode !== config.currencyCode) throw new Error(`A saved entry uses ${record.currencyCode}, but this Sheet uses ${config.currencyCode}. The entry remains saved on this device.`);
+    if (record.currencyCode && record.currencyCode !== config.currencyCode) throw new Error(`A saved entry uses ${record.currencyCode}, but this Sheet uses ${config.currencyCode}.`);
     if (remoteIds.has(record.id)) { await putTransaction({ ...record, syncState: 'synced' }); continue; }
     const row = Array(coreCols).fill('');
     row[indexes.timestampIndex] = formatSheetTimestamp(record.createdAt, timeZone);
@@ -1171,9 +1082,8 @@ async function appendPendingForBook(config, indexes, remoteSheet, timeZone, book
     await sheetsRequest(sheetValuesUrl(config.spreadsheetId, `${tab}!A${totalsRow}:${endColLetter}${totalsRow + 1}`, 'valueInputOption=USER_ENTERED'), { method: 'PUT', body: JSON.stringify({ majorDimension: 'ROWS', values: [totalLine, remainingLine] }) });
     try { await styleTotalsBlock(config, indexes, totalsRow); } catch {}
     return '';
-  } catch (error) { return `the totals under your entries could not be written (${error.message || 'unknown reason'}).`; }
+  } catch (e) { return `the totals under your entries could not be written (${e.message || 'unknown'}).`; }
 }
-
 async function readStartingBalance(config) {
   const data = await sheetsRequest(sheetValuesUrl(config.spreadsheetId, `${quoteSheetName(config.dashboardTab)}!B13`, 'valueRenderOption=UNFORMATTED_VALUE'));
   const v = data.values?.[0]?.[0];
@@ -1181,35 +1091,21 @@ async function readStartingBalance(config) {
   return typeof v === 'number' ? Math.round(v * currencyScale(config.currencyCode)) : parseMoney(v, config.currencyCode);
 }
 function archiveStamp(date) { const pad = (n) => String(n).padStart(2, '0'); return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}${pad(date.getMinutes())}`; }
-async function readSheetTabs(config) {
-  const data = await sheetsRequest(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.spreadsheetId)}?fields=sheets.properties(sheetId,title)`);
-  return (data.sheets || []).map((s) => s.properties);
-}
+async function readSheetTabs(config) { const data = await sheetsRequest(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.spreadsheetId)}?fields=sheets.properties(sheetId,title)`); return (data.sheets || []).map((s) => s.properties); }
 function sheetsBatchUpdate(config, requests) { return sheetsRequest(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.spreadsheetId)}:batchUpdate`, { method: 'POST', body: JSON.stringify({ requests }) }); }
-async function copySpreadsheetToDrive(config, name) {
-  try { await sheetsRequest(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(config.spreadsheetId)}/copy`, { method: 'POST', body: JSON.stringify({ name }) }); return true; }
-  catch { return false; }
-}
-async function archiveResponseTab(config, tabs, name) {
-  const src = tabs.find((t) => t.title === config.responseTab);
-  if (!src) throw new Error(`Could not find the “${config.responseTab}” tab in your Sheet.`);
-  await sheetsBatchUpdate(config, [{ duplicateSheet: { sourceSheetId: src.sheetId, newSheetName: name } }]);
-}
+async function copySpreadsheetToDrive(config, name) { try { await sheetsRequest(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(config.spreadsheetId)}/copy`, { method: 'POST', body: JSON.stringify({ name }) }); return true; } catch { return false; } }
+async function archiveResponseTab(config, tabs, name) { const src = tabs.find((t) => t.title === config.responseTab); if (!src) throw new Error(`Could not find the “${config.responseTab}” tab.`); await sheetsBatchUpdate(config, [{ duplicateSheet: { sourceSheetId: src.sheetId, newSheetName: name } }]); }
 async function archiveDashboardTab(config, tabs, name) {
   const src = tabs.find((t) => t.title === (config.dashboardTab || 'Dashboard'));
-  if (!src) throw new Error(`Could not find the “${config.dashboardTab || 'Dashboard'}” tab in your Sheet.`);
-  const dupResult = await sheetsBatchUpdate(config, [{ duplicateSheet: { sourceSheetId: src.sheetId, newSheetName: name } }]);
-  const dupProps = dupResult.replies?.[0]?.duplicateSheet?.properties;
-  const newSheetId = dupProps?.sheetId;
-  const rowCount = dupProps?.gridProperties?.rowCount || 1000;
-  const colCount = dupProps?.gridProperties?.columnCount || 26;
+  if (!src) throw new Error(`Could not find the “${config.dashboardTab || 'Dashboard'}” tab.`);
+  const dup = await sheetsBatchUpdate(config, [{ duplicateSheet: { sourceSheetId: src.sheetId, newSheetName: name } }]);
+  const newSheetId = dup.replies?.[0]?.duplicateSheet?.properties?.sheetId;
+  const rows = dup.replies?.[0]?.duplicateSheet?.properties?.gridProperties?.rowCount || 1000;
+  const cols = dup.replies?.[0]?.duplicateSheet?.properties?.gridProperties?.columnCount || 26;
   if (typeof newSheetId !== 'number') throw new Error('Could not duplicate the dashboard tab.');
-  await sheetsBatchUpdate(config, [{ copyPaste: { source: { sheetId: newSheetId, startRowIndex: 0, endRowIndex: rowCount, startColumnIndex: 0, endColumnIndex: colCount }, destination: { sheetId: newSheetId, startRowIndex: 0, endRowIndex: rowCount, startColumnIndex: 0, endColumnIndex: colCount }, pasteType: 'PASTE_VALUES', pasteOrientation: 'NORMAL' } }]);
+  await sheetsBatchUpdate(config, [{ copyPaste: { source: { sheetId: newSheetId, startRowIndex: 0, endRowIndex: rows, startColumnIndex: 0, endColumnIndex: cols }, destination: { sheetId: newSheetId, startRowIndex: 0, endRowIndex: rows, startColumnIndex: 0, endColumnIndex: cols }, pasteType: 'PASTE_VALUES', pasteOrientation: 'NORMAL' } }]);
 }
-async function usedRowCount(config, tabName) {
-  const data = await sheetsRequest(sheetValuesUrl(config.spreadsheetId, `${quoteSheetName(tabName)}!A:A`));
-  return (data.values || []).length;
-}
+async function usedRowCount(config, tabName) { const data = await sheetsRequest(sheetValuesUrl(config.spreadsheetId, `${quoteSheetName(tabName)}!A:A`)); return (data.values || []).length; }
 async function deleteOldRows(config, tabs, lastRowNumber) {
   if (lastRowNumber <= 1) return;
   const src = tabs.find((t) => t.title === config.responseTab);
@@ -1245,66 +1141,61 @@ async function archiveAndStartFresh() {
   elements.archiveNow.disabled = true;
   try {
     setArchiveStatus('Syncing this book first…');
-    try { await syncBookToSheet(book); }
-    catch (error) { setArchiveStatus(`Could not sync this book first: ${error.message || 'unknown reason'}`, true); return; }
+    try { await syncBookToSheet(book); } catch (e) { setArchiveStatus(`Could not sync first: ${e.message || 'unknown'}`, true); return; }
     const active = await getActiveBookRecords();
-    if (active.some((r) => r.syncState === 'pending')) throw new Error('Some entries are not on your Sheet yet. Fix the sync problem, then try again.');
+    if (active.some((r) => r.syncState === 'pending')) throw new Error('Some entries are not on your Sheet yet.');
     const income = active.reduce((s, x) => s + (Number(x.moneyInMinor) || 0), 0);
     const expense = active.reduce((s, x) => s + (Number(x.moneyOutMinor) || 0), 0);
-    const startingBalance = Number(await getSetting(`startingBalance:${book.id}`, 0)) || 0;
-    const carry = elements.carryBalance?.checked ? startingBalance + income - expense : 0;
+    const sb = Number(await getSetting(`startingBalance:${book.id}`, 0)) || 0;
+    const carry = elements.carryBalance?.checked ? sb + income - expense : 0;
     const nameForConfirm = (elements.archiveName?.value || '').trim();
-    const dashboardArchiveNameForConfirm = nameForConfirm ? `${nameForConfirm} - Dashboard` : '';
     const proceed = window.confirm(
       'Archive this book and start fresh?\n\n' +
-      (nameForConfirm ? `• The archive tabs will be named “${nameForConfirm}” and “${dashboardArchiveNameForConfirm}”.\n` : '• Archive tabs will be created for your entries and dashboard.\n') +
-      '• A copy of your Sheet is saved in Drive first (if enabled).\n• Your old entries and a frozen snapshot of your Dashboard are saved to archive tabs.\n• The old entries are then removed from the main response tab.\n' +
-      `• This book starts counting again from ${formatMoney(carry)}.\n\nContinue?`
+      (nameForConfirm ? `• Archive tabs: “${nameForConfirm}” and “${nameForConfirm} - Dashboard”.\n` : '• Archive tabs will be created for your entries and dashboard.\n') +
+      `• A copy of your Sheet is saved in Drive first.\n• New balance: ${formatMoney(carry)}.\n\nContinue?`
     );
     if (!proceed) { setArchiveStatus('Cancelled. Nothing was changed.'); return; }
     const now = new Date();
     const stamp = archiveStamp(now);
     const typed = (elements.archiveName?.value || '').replace(/[\[\]*?:\/\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
     const archiveName = typed || `Archive ${stamp}`;
-    const dashboardArchiveName = `${archiveName} - Dashboard`;
+    const dashName = `${archiveName} - Dashboard`;
     const scale = currencyScale(config.currencyCode || activeCurrencyCode);
-    setArchiveStatus('Saving a copy of your Sheet…');
+    setArchiveStatus('Saving a copy…');
     const tabs = await readSheetTabs(config);
-    if (tabs.some((t) => t.title.toLowerCase() === archiveName.toLowerCase())) throw new Error(`A tab called “${archiveName}” already exists. Choose a different archive name.`);
-    if (tabs.some((t) => t.title.toLowerCase() === dashboardArchiveName.toLowerCase())) throw new Error(`A tab called “${dashboardArchiveName}” already exists. Choose a different archive name.`);
+    if (tabs.some((t) => t.title.toLowerCase() === archiveName.toLowerCase())) throw new Error(`A tab called “${archiveName}” already exists.`);
+    if (tabs.some((t) => t.title.toLowerCase() === dashName.toLowerCase())) throw new Error(`A tab called “${dashName}” already exists.`);
     const driveCopied = await copySpreadsheetToDrive(config, `${config.spreadsheetName || 'Cashbook'} - ${archiveName}`);
     const sourceRows = await usedRowCount(config, config.responseTab);
-    setArchiveStatus('Archiving responses and dashboard…');
+    setArchiveStatus('Archiving…');
     await archiveResponseTab(config, tabs, archiveName);
-    await archiveDashboardTab(config, tabs, dashboardArchiveName);
-    setArchiveStatus('Moving old entries into the archive…');
+    await archiveDashboardTab(config, tabs, dashName);
+    setArchiveStatus('Moving old entries…');
     let cleared = false, clearProblem = '';
     try {
       const archived = await usedRowCount(config, archiveName);
-      if (archived !== sourceRows) throw new Error('the archive copy did not match the original');
+      if (archived !== sourceRows) throw new Error('archive copy mismatch');
       await deleteOldRows(config, tabs, sourceRows);
       cleared = true;
-    } catch (error) { clearProblem = error.message || 'unknown reason'; }
+    } catch (e) { clearProblem = e.message || 'unknown'; }
     setArchiveStatus('Starting the new period…');
     await ensurePeriodsTab(config, tabs);
     await sheetsRequest(sheetValuesUrl(config.spreadsheetId, `${quoteSheetName(config.dashboardTab || 'Dashboard')}!B13`, 'valueInputOption=RAW'), { method: 'PUT', body: JSON.stringify({ values: [[carry / scale]] }) });
     const periodStart = new Date(Math.floor(now.getTime() / 1000) * 1000).toISOString();
-    await sheetsRequest(`${sheetValuesUrl(config.spreadsheetId, `${quoteSheetName(PERIODS_TAB)}!A:C`)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, { method: 'POST', body: JSON.stringify({ majorDimension: 'ROWS', values: [[periodStart, carry / scale, `${archiveName}, ${dashboardArchiveName}`]] }) });
+    await sheetsRequest(`${sheetValuesUrl(config.spreadsheetId, `${quoteSheetName(PERIODS_TAB)}!A:C`)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, { method: 'POST', body: JSON.stringify({ majorDimension: 'ROWS', values: [[periodStart, carry / scale, `${archiveName}, ${dashName}`]] }) });
     await saveSetting(`periodStart:${book.id}`, periodStart);
     await saveSetting(`startingBalance:${book.id}`, carry);
     if (elements.archiveName) elements.archiveName.value = '';
     await refreshView();
-    const where = driveCopied ? `the “${archiveName}” and “${dashboardArchiveName}” tabs and a full copy in your Google Drive` : `the “${archiveName}” and “${dashboardArchiveName}” tabs of your Sheet (the Drive copy was skipped)`;
-    const clearNote = cleared ? ' The main tab is now empty, ready for new entries.' : ` The old rows could not be removed from the main tab (${clearProblem}), so they are still there. Your data is safe.`;
-    setArchiveStatus(`Done. Your old entries and dashboard are saved in ${where}.${clearNote}`);
+    const where = driveCopied ? `“${archiveName}” + “${dashName}” tabs and a Drive copy` : `“${archiveName}” + “${dashName}” tabs (Drive copy skipped)`;
+    const clearNote = cleared ? ' Main tab is empty.' : ` Old rows could not be removed (${clearProblem}). Your data is safe.`;
+    setArchiveStatus(`Done. Saved to ${where}.${clearNote}`);
     announce('New period started.');
-  } catch (error) { setArchiveStatus(error.message || 'Could not archive. Nothing was deleted.', true); }
+  } catch (e) { setArchiveStatus(e.message || 'Could not archive. Nothing was deleted.', true); }
   finally { elements.archiveNow.disabled = false; }
 }
 
-async function cleanupOldRightSummary(config) {
-  try { await sheetsRequest(`${sheetValuesUrl(config.spreadsheetId, `${quoteSheetName(config.responseTab)}!G1:Z1`)}:clear`, { method: 'POST' }); } catch {}
-}
+async function cleanupOldRightSummary(config) { try { await sheetsRequest(`${sheetValuesUrl(config.spreadsheetId, `${quoteSheetName(config.responseTab)}!G1:Z1`)}:clear`, { method: 'POST' }); } catch {} }
 
 async function syncBookToSheet(book) {
   const config = await bookConfig(book);
@@ -1322,41 +1213,32 @@ async function syncBookToSheet(book) {
   await applySheetPeriod(config, book.id);
   if (totalsWarning) throw new Error(totalsWarning);
 }
-
 async function syncAllBooks() {
   if (isSyncing) return;
   if (!cryptoKey) return;
   if (!navigator.onLine) { setSyncStatus('Saved offline', 'Your entries are queued on this device for when you are online.', 'offline'); return; }
   if (!tokenIsValid()) { setSyncStatus('Waiting to sync', 'Tap “Sync now” to sign in and send your entries.', 'pending'); return; }
-  isSyncing = true;
-  elements.syncNow.disabled = true;
-
+  isSyncing = true; elements.syncNow.disabled = true;
   const allRecs = await getAllTransactions();
-  const targets = [];
-  const skipped = [];
-  const seen = new Set();
+  const targets = [], skipped = [], seen = new Set();
   for (const b of [activeBook(), ...books]) {
     if (!b || seen.has(b.id)) continue;
     seen.add(b.id);
     if (b.spreadsheetId) targets.push(b);
     else {
-      const pendingCount = allRecs.filter((r) => r.bookId === b.id && r.syncState === 'pending').length;
-      if (pendingCount > 0) skipped.push({ name: b.name, count: pendingCount });
+      const c = allRecs.filter((r) => r.bookId === b.id && r.syncState === 'pending').length;
+      if (c > 0) skipped.push({ name: b.name, count: c });
     }
   }
-
-  const total = targets.length;
-  let i = 0;
+  const total = targets.length; let i = 0;
   const errors = [];
   try {
     for (const book of targets) {
       i++;
       setSyncStatus('Syncing', `Syncing ${book.name} (${i} of ${total})…`, 'ready');
-      try { await syncBookToSheet(book); }
-      catch (error) { errors.push({ name: book.name, message: error.message || 'unknown error' }); }
+      try { await syncBookToSheet(book); } catch (e) { errors.push({ name: book.name, message: e.message || 'unknown error' }); }
     }
     lastSyncFinishedAt = Date.now();
-
     if (errors.length) {
       const msg = errors.map((e) => `“${e.name}”: ${e.message}`).join('; ');
       setSyncStatus('Sync needs attention', msg, 'error');
@@ -1371,54 +1253,34 @@ async function syncAllBooks() {
       setSyncStatus('Google Sheets connected', 'All connected books are synced.', 'ready');
       setSetupStatus('All connected books synced.');
     }
-  } finally {
-    isSyncing = false;
-    elements.syncNow.disabled = false;
-    await refreshView();
-  }
+  } finally { isSyncing = false; elements.syncNow.disabled = false; await refreshView(); }
 }
-
 async function oneTapSync() {
   if (!cryptoKey) return;
   if (!navigator.onLine) { announce('You are offline. Your entries are safe on this device.'); return; }
-
   const allRecs = await getAllTransactions();
-  const booksWithPendingNoSheet = [];
+  const pendingNoSheet = [];
   for (const b of books) {
     if (!b.spreadsheetId) {
       const c = allRecs.filter((r) => r.bookId === b.id && r.syncState === 'pending').length;
-      if (c > 0) booksWithPendingNoSheet.push({ book: b, count: c });
+      if (c > 0) pendingNoSheet.push({ book: b, count: c });
     }
   }
-
-  if (!books.some((b) => b.spreadsheetId) && !booksWithPendingNoSheet.length) {
-    updateOnboarding();
-    elements.onboardingCard?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    announce('Create or choose a Sheet for this book first.');
-    return;
+  if (!books.some((b) => b.spreadsheetId) && !pendingNoSheet.length) {
+    updateOnboarding(); elements.onboardingCard?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    announce('Create or choose a Sheet for this book first.'); return;
   }
-
-  try { await ensureSignedIn(); }
-  catch (error) { setSyncStatus('Sign-in needed', error.message || 'Google sign-in was not completed.', 'error'); return; }
-
-  const originalBookId = currentBookId;
-  for (const { book, count } of booksWithPendingNoSheet) {
-    const ok = window.confirm(
-      `Book “${book.name}” has ${count} ${count === 1 ? 'entry' : 'entries'} waiting but no Google Sheet.\n\n` +
-      `Create a Google Sheet for “${book.name}” now?\n\n` +
-      `Yes = create the Sheet (saved in My Drive root; you can move it later in Drive).\n` +
-      `No = skip; the entries stay on this device.`
-    );
+  try { await ensureSignedIn(); } catch (e) { setSyncStatus('Sign-in needed', e.message || 'Google sign-in was not completed.', 'error'); return; }
+  const original = currentBookId;
+  for (const { book, count } of pendingNoSheet) {
+    const ok = window.confirm(`Book “${book.name}” has ${count} ${count === 1 ? 'entry' : 'entries'} waiting but no Google Sheet.\n\nCreate a Sheet for “${book.name}” now?\n\nYes = create it (in My Drive root).\nNo = skip.`);
     if (!ok) continue;
     if (book.id !== currentBookId) await switchBook(book.id);
-    try { await createNewSpreadsheet({ skipConfirm: true, syncAfter: false, askFolder: false }); }
-    catch (e) { /* reported via setupStatus */ }
+    try { await createNewSpreadsheet({ syncAfter: false, askFolder: false }); } catch (e) {}
   }
-  if (currentBookId !== originalBookId) await switchBook(originalBookId);
-
+  if (currentBookId !== original) await switchBook(original);
   await syncAllBooks();
 }
-
 async function autoSync() {
   if (isSyncing || !cryptoKey || !navigator.onLine) return;
   if (!books.some((b) => b.spreadsheetId)) return;
@@ -1429,7 +1291,6 @@ async function autoSync() {
   if (!tokenIsValid()) { await refreshView(); return; }
   await syncAllBooks();
 }
-
 async function mergeSheetRecords(remoteRecords, bookId) {
   const local = await getBookTransactions(bookId);
   const byId = new Map(local.map((r) => [r.id, r]));
@@ -1440,18 +1301,16 @@ async function mergeSheetRecords(remoteRecords, bookId) {
   }
 }
 
-// ===== LOCK FLOW =====
+// ===== LOCK =====
 function showLockScreen(mode) {
-  elements.lockScreen.style.display = 'flex';
-  elements.appShell.style.display = 'none';
-  const hasPassword = mode === 'password' || mode === 'both';
-  const hasBiometrics = mode === 'biometrics' || mode === 'both';
-  elements.unlockForm.style.display = hasPassword ? 'flex' : 'none';
-  elements.biometricBtn.style.display = hasBiometrics ? 'flex' : 'none';
+  elements.lockScreen.style.display = 'flex'; elements.appShell.style.display = 'none';
+  const hp = mode === 'password' || mode === 'both';
+  const hb = mode === 'biometrics' || mode === 'both';
+  elements.unlockForm.style.display = hp ? 'flex' : 'none';
+  elements.biometricBtn.style.display = hb ? 'flex' : 'none';
   elements.forgotPasswordBtn.style.display = 'inline-block';
-  elements.forgotPasswordBtn.textContent = hasPassword ? 'Forgot password?' : 'Can’t unlock? Erase this device';
-  elements.unlockPassword.value = '';
-  elements.unlockBtn.textContent = 'Unlock Cashbook';
+  elements.forgotPasswordBtn.textContent = hp ? 'Forgot password?' : 'Can’t unlock? Erase this device';
+  elements.unlockPassword.value = ''; elements.unlockBtn.textContent = 'Unlock Cashbook';
 }
 function lockApp() {
   cryptoKey = null; masterKeyRaw = null; clearTimeout(idleTimeout);
@@ -1459,11 +1318,7 @@ function lockApp() {
   showLockScreen(state.hasPassword && state.hasBiometrics ? 'both' : state.hasPassword ? 'password' : 'biometrics');
   elements.lockMessage.textContent = state.hasPassword ? 'Enter your master password to unlock your encrypted cashbook.' : 'Use Face ID / fingerprint to unlock your cashbook.';
 }
-function resetIdleTimer() {
-  clearTimeout(idleTimeout);
-  if (!cryptoKey || !isProtected()) return;
-  idleTimeout = setTimeout(() => lockApp(), 5 * 60 * 1000);
-}
+function resetIdleTimer() { clearTimeout(idleTimeout); if (!cryptoKey || !isProtected()) return; idleTimeout = setTimeout(() => lockApp(), 5 * 60 * 1000); }
 async function updateOfflineStatus() {
   const build = `build ${APP_BUILD}`;
   if (!elements.storageStatus) return;
@@ -1474,10 +1329,8 @@ async function updateOfflineStatus() {
   if (active) { for (const u of ['./', './app.js', './styles.css']) { if (!(await caches.match(u, { ignoreSearch: true }))) { saved = false; break; } } }
   elements.storageStatus.textContent = saved ? `Works offline ✓ · ${build}` : `Offline files not saved yet. Open the app once while online. · ${build}`;
 }
-
 async function startApp() {
-  elements.lockScreen.style.display = 'none';
-  elements.appShell.style.display = 'block';
+  elements.lockScreen.style.display = 'none'; elements.appShell.style.display = 'block';
   updateSecurityUi();
   await loadBooks();
   await loadSavedConfig();
@@ -1493,29 +1346,23 @@ async function startApp() {
   resetIdleTimer();
   if ('serviceWorker' in navigator) { navigator.serviceWorker.getRegistration().then((r) => r?.update()).catch(() => {}); }
 }
-
 async function readAllRaw(storeName) {
   const db = await openDatabase();
   const tx = db.transaction(storeName, 'readonly');
-  return new Promise((resolve, reject) => { const req = tx.objectStore(storeName).getAll(); req.onsuccess = () => resolve(req.result || []); req.onerror = () => reject(req.error); });
+  return new Promise((res, rej) => { const r = tx.objectStore(storeName).getAll(); r.onsuccess = () => res(r.result || []); r.onerror = () => rej(r.error); });
 }
 async function migrateFromLegacy(legacyKey) {
   if (!masterKeyRaw) { await generateMasterKey(); localStorage.setItem('cb_key_pending', JSON.stringify(await wrapMasterKeyWith(legacyKey))); }
   const transactions = await readAllRaw(STORE_TRANSACTIONS);
   for (const record of transactions) {
     let payload = record;
-    if (record.encrypted) {
-      const plain = await decryptText(record.encrypted, legacyKey);
-      if (plain == null) continue;
-      try { payload = JSON.parse(plain); } catch { continue; }
-      payload.id = record.id;
-    }
+    if (record.encrypted) { const p = await decryptText(record.encrypted, legacyKey); if (p == null) continue; try { payload = JSON.parse(p); } catch { continue; } payload.id = record.id; }
     await putTransaction(payload);
   }
   const settings = await readAllRaw(STORE_SETTINGS);
   for (const setting of settings) {
     let value;
-    if (setting.encrypted) { const plain = await decryptText(setting.encrypted, legacyKey); if (plain == null) continue; try { value = JSON.parse(plain); } catch { continue; } }
+    if (setting.encrypted) { const p = await decryptText(setting.encrypted, legacyKey); if (p == null) continue; try { value = JSON.parse(p); } catch { continue; } }
     else if (setting.value !== undefined) value = setting.value;
     else continue;
     await saveSetting(setting.key, value);
@@ -1547,7 +1394,6 @@ async function unlockWithPassword(password) {
   } else throw new Error('No master password is set. Use Face ID / fingerprint to unlock.');
   await startApp();
 }
-
 async function switchGoogleAccount() {
   const ok = window.confirm('Use a different Google account?\n\n• Your current Google Sheet is NOT changed or deleted.\n• Your entries stay on this device.\n• This book’s entries will be uploaded to the Sheet you create or pick with the new account.\n\nContinue?');
   if (!ok) return;
@@ -1562,11 +1408,10 @@ async function switchGoogleAccount() {
     setSetupStatus('Ready for a new account. Create or pick a Sheet for this book.');
     announce('Choose your new Google account below.');
     elements.onboardingCard?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  } catch (error) { setSetupStatus(error.message || 'Could not switch accounts.', true); }
+  } catch (e) { setSetupStatus(e.message || 'Could not switch accounts.', true); }
 }
-
 async function forgotPassword() {
-  const msg = ['Forgot your password?', '', 'Your entries on this device are encrypted and cannot be recovered without the password.', 'If you synced to a Google Sheet, those entries are safe there and can be brought back by connecting the Sheet again.', '', 'Type ERASE to erase this device\u2019s data and start fresh.'].join('\n');
+  const msg = ['Forgot your password?', '', 'Your entries on this device are encrypted and cannot be recovered without the password.', 'If you synced to a Google Sheet, those entries are safe there.', '', 'Type ERASE to erase this device\u2019s data and start fresh.'].join('\n');
   const input = window.prompt(msg);
   if (input === null) return;
   if (input.trim() !== 'ERASE') { alert('Nothing was erased. Type ERASE exactly to confirm.'); return; }
@@ -1586,21 +1431,19 @@ async function setPasswordHandler() {
     localStorage.setItem('cb_has_password', 'true');
     localStorage.removeItem('cb_key_raw');
     elements.passwordInput.value = '';
-    setSetupStatus('Master password saved.');
-    announce('Master password set.');
+    setSetupStatus('Master password saved.'); announce('Master password set.');
     updateSecurityUi();
-  } catch (error) { setSetupStatus(error.message || 'Could not set the password.', true); }
+  } catch (e) { setSetupStatus(e.message || 'Could not set the password.', true); }
 }
 async function removePasswordHandler() {
   if (!localStorage.getItem('cb_key_wrapped')) { setSetupStatus('No master password is set.', true); return; }
   if (!securityState().hasBiometrics) {
-    const ok = window.confirm('Remove your master password?\n\nYour cashbook will then open without any lock on this device, so anyone using this device could see your entries.');
+    const ok = window.confirm('Remove your master password?\n\nYour cashbook will then open without any lock on this device.');
     if (!ok) return;
   }
   localStorage.removeItem('cb_key_wrapped'); localStorage.removeItem('cb_has_password');
   if (!securityState().hasBiometrics && masterKeyRaw) localStorage.setItem('cb_key_raw', bytesToB64(masterKeyRaw));
-  setSetupStatus('Master password removed.');
-  announce('Master password removed.');
+  setSetupStatus('Master password removed.'); announce('Master password removed.');
   updateSecurityUi();
 }
 
@@ -1609,11 +1452,8 @@ function bindBookEvents() {
   elements.newBookBtn?.addEventListener('click', async () => {
     const name = window.prompt('Name the new book (e.g. Home, Business):');
     if (name === null) return;
-    try {
-      await createBook(name);
-      await refreshView();
-      announce(`Created “${activeBook().name}”. Tap “Create a new Sheet” in Settings → Books to back it up.`);
-    } catch (error) { announce(error.message || 'Could not create the book.'); }
+    try { await createBook(name); await refreshView(); announce(`Created “${activeBook().name}”. Tap “Create a new Sheet” in Settings → Books to back it up.`); }
+    catch (e) { announce(e.message || 'Could not create the book.'); }
   });
 }
 
@@ -1626,39 +1466,33 @@ function bindEvents() {
   });
   elements.forgotPasswordBtn.addEventListener('click', () => void forgotPassword());
   elements.unlockForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    elements.unlockBtn.disabled = true; elements.lockError.textContent = '';
+    e.preventDefault(); elements.unlockBtn.disabled = true; elements.lockError.textContent = '';
     try { await unlockWithPassword(elements.unlockPassword.value); }
-    catch (error) { elements.lockError.textContent = error.message || 'Failed to unlock.'; elements.unlockPassword.value = ''; }
+    catch (err) { elements.lockError.textContent = err.message || 'Failed to unlock.'; elements.unlockPassword.value = ''; }
     finally { elements.unlockBtn.disabled = false; }
   });
   elements.biometricToggle?.addEventListener('change', async (e) => {
     if (e.target.checked) {
-      if (!securityState().hasPassword && !window.confirm('Use Face ID / fingerprint without a password?\n\nIf you later lose this passkey (new phone, reset browser, deleted passkey), this device’s entries cannot be unlocked. Entries already synced to your Google Sheet stay safe there. Setting a password too gives you a second way in.\n\nContinue?')) { e.target.checked = false; return; }
+      if (!securityState().hasPassword && !window.confirm('Use Face ID / fingerprint without a password?\n\nIf you lose this passkey, this device’s entries cannot be unlocked. Entries already in your Google Sheet stay safe there.\n\nContinue?')) { e.target.checked = false; return; }
       try { await enableBiometrics(); e.target.checked = true; setSetupStatus('Face ID / fingerprint enabled.'); announce('Face ID / fingerprint enabled.'); }
-      catch (error) { e.target.checked = false; alert(error.message || 'Could not enable Face ID / fingerprint.'); }
+      catch (err) { e.target.checked = false; alert(err.message || 'Could not enable Face ID / fingerprint.'); }
     } else { disableBiometrics(); setSetupStatus('Face ID / fingerprint disabled.'); announce('Face ID / fingerprint disabled.'); }
     updateSecurityUi();
   });
   elements.setPasswordBtn?.addEventListener('click', () => void setPasswordHandler());
   elements.removePasswordBtn?.addEventListener('click', () => void removePasswordHandler());
   elements.signOutGoogle?.addEventListener('click', async () => {
-    const ok = window.confirm('Sign out of Google on this app?\n\nYour entries stay on this device and your Sheet stays connected. Next time you sign in you will be asked which Google account to use.');
+    const ok = window.confirm('Sign out of Google on this app?\n\nYour entries stay on this device and your Sheet stays connected.');
     if (!ok) return;
-    clearSavedToken();
-    try { localStorage.setItem(CHOOSE_ACCOUNT_KEY, '1'); } catch {}
-    await refreshView();
-    setSetupStatus('Signed out. Tap “Sign in & sync” to continue.');
-    announce('Signed out of Google.');
+    clearSavedToken(); try { localStorage.setItem(CHOOSE_ACCOUNT_KEY, '1'); } catch {}
+    await refreshView(); setSetupStatus('Signed out. Tap “Sign in & sync” to continue.'); announce('Signed out of Google.');
   });
   elements.switchGoogleAccount?.addEventListener('click', () => void switchGoogleAccount());
   elements.resetGoogleCreds?.addEventListener('click', async () => {
     if (elements.clientId) elements.clientId.value = DEFAULT_CLIENT_ID;
     if (elements.apiKey) elements.apiKey.value = DEFAULT_API_KEY;
     if (elements.appId) elements.appId.value = DEFAULT_APP_ID;
-    await saveConfig();
-    setSetupStatus('Google credentials reset to the app defaults. Reconnect Google to apply them.');
-    announce('Google credentials reset.');
+    await saveConfig(); setSetupStatus('Google credentials reset to app defaults.'); announce('Google credentials reset.');
   });
   elements.lockNowBtn?.addEventListener('click', lockApp);
   elements.transactionForm.addEventListener('submit', createTransaction);
@@ -1688,7 +1522,7 @@ function bindEvents() {
   ['click', 'keydown', 'mousemove', 'touchstart'].forEach((evt) => document.addEventListener(evt, resetIdleTimer));
   bindBookEvents();
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-    navigator.serviceWorker.register('./sw.js').catch(() => { elements.storageStatus.textContent = `Offline mode could not start in this browser · build ${APP_BUILD}`; });
+    navigator.serviceWorker.register('./sw.js').catch(() => { elements.storageStatus.textContent = `Offline mode could not start · build ${APP_BUILD}`; });
   }
 }
 
@@ -1703,12 +1537,11 @@ async function initialize() {
   if (isLegacy) { elements.lockMessage.textContent = 'Enter your master password to unlock your encrypted cashbook.'; showLockScreen('password'); return; }
   if (hasWrapped || hasPrf) {
     elements.lockMessage.textContent = hasWrapped ? 'Enter your master password to unlock your encrypted cashbook.' : 'Use Face ID / fingerprint to unlock your cashbook.';
-    showLockScreen(hasWrapped && hasPrf ? 'both' : hasWrapped ? 'password' : 'biometrics');
-    return;
+    showLockScreen(hasWrapped && hasPrf ? 'both' : hasWrapped ? 'password' : 'biometrics'); return;
   }
   if (hasRaw) {
     try { await setMasterKeyFromBytes(b64ToBytes(hasRaw)); await openDatabase(); await startApp(); }
-    catch (error) { console.error('Could not open the local cashbook', error); elements.storageStatus.textContent = 'Could not read local data.'; }
+    catch (err) { console.error('Could not open the local cashbook', err); elements.storageStatus.textContent = 'Could not read local data.'; }
     return;
   }
   try {
@@ -1717,7 +1550,7 @@ async function initialize() {
     await openDatabase();
     await saveSetting('__auth_check__', 'valid');
     await startApp();
-  } catch (error) { console.error('Setup failed', error); elements.lockMessage.textContent = 'Could not initialize local storage.'; }
+  } catch (err) { console.error('Setup failed', err); elements.lockMessage.textContent = 'Could not initialize local storage.'; }
 }
 
 void initialize();
