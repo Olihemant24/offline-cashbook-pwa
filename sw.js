@@ -1,5 +1,5 @@
 // Offline cache for My Cashbook. Raise the number in CACHE_NAME every time you upload new files.
-const CACHE_NAME = 'my-cashbook-shell-v24';
+const CACHE_NAME = 'my-cashbook-shell-v25';
 
 // The app cannot work offline without these. If one cannot be downloaded, the update is not installed.
 const CORE_FILES = ['./', './index.html', './styles.css', './app.js', './manifest.webmanifest', './icon.svg'];
